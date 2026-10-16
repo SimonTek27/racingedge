@@ -1,16 +1,16 @@
-/// CLI tools that bridge REA reverse engineering analysis and FMOD bank
-/// inspection to the racingedge modding suite.
-///
-/// Usage:
-///   rea_bridge analyze-native-binary <path> [--output <fmt>]
-///   rea_bridge generate-rust-code <pseudocode-file> [--output <file>]
-///   rea_bridge parse-fmod-bank <bank> <header-info> [--output <file>]
-///   rea_bridge fsb-info <bank.fsb>
-///   rea_bridge fsb-extract <bank.fsb> <outdir>
-///   rea_bridge fsb-ogg <bank.fsb> <outdir>
-///   rea_bridge fsb-pack <out.fsb> <input.wav> [<input.wav> ...]
-///   rea_bridge fsb-import-ogg <out.fsb> <input.ogg> [--name <name>]
-///   rea_bridge fsb-encode <out.fsb> <input.wav> [--name <name>] [--quality <0-100>]
+//! CLI tools that bridge REA reverse engineering analysis and FMOD bank
+//! inspection to the racingedge modding suite.
+//!
+//! Usage:
+//!   rea_bridge analyze-native-binary <path> [--output <fmt>]
+//!   rea_bridge generate-rust-code <pseudocode-file> [--output <file>]
+//!   rea_bridge parse-fmod-bank <bank> <header-info> [--output <file>]
+//!   rea_bridge fsb-info <bank.fsb>
+//!   rea_bridge fsb-extract <bank.fsb> <outdir>
+//!   rea_bridge fsb-ogg <bank.fsb> <outdir>
+//!   rea_bridge fsb-pack <out.fsb> <input.wav> [<input.wav> ...]
+//!   rea_bridge fsb-import-ogg <out.fsb> <input.ogg> [--name <name>]
+//!   rea_bridge fsb-encode <out.fsb> <input.wav> [--name <name>] [--quality <0-100>]
 
 use racingedge::editor::audio::vorbis;
 use racingedge::editor::audio::vorbis_encode;
@@ -48,13 +48,17 @@ fn print_usage() {
     println!("racingedge rea_bridge — REA + FMOD bank tooling");
     println!();
     println!("Commands:");
-    println!("  analyze-native-binary <path>     Show the REA analysis workflow for a native binary");
+    println!(
+        "  analyze-native-binary <path>     Show the REA analysis workflow for a native binary"
+    );
     println!("  generate-rust-code <file>        Translate REA pseudocode into a Rust skeleton");
     println!("  parse-fmod-bank <bank> <header>  Plan an FSB parse from REA header info");
     println!("  fsb-info <bank.fsb>              Parse an FSB5 bank and print its samples");
     println!("  fsb-extract <bank.fsb> <outdir>  Extract samples (WAV for PCM, Ogg for Vorbis)");
     println!("  fsb-ogg <bank.fsb> <outdir>      Rebuild Vorbis samples as playable .ogg files");
-    println!("  fsb-pack <out.fsb> <wav...>      Build an FSB5 bank from one or more PCM .wav files");
+    println!(
+        "  fsb-pack <out.fsb> <wav...>      Build an FSB5 bank from one or more PCM .wav files"
+    );
     println!("  fsb-edit <in.fsb> <out.fsb>      Edit a bank (rename, loop, rate, replace audio)");
     println!("  fsb-import-ogg <out.fsb> <in.ogg>  Build a Vorbis bank from an .ogg file");
     println!("  fsb-encode <out.fsb> <in.wav>    Encode a .wav to a Vorbis bank (FMOD encoder)");
@@ -147,7 +151,11 @@ fn fsb_info(args: &[String]) {
     println!("sample header size : {} bytes", bank.sample_header_size);
     println!("name table size    : {} bytes", bank.name_table_size);
     println!("data size          : {} bytes", bank.data_size);
-    println!("format             : {} (mode {})", bank.format, bank.format.as_u32());
+    println!(
+        "format             : {} (mode {})",
+        bank.format,
+        bank.format.as_u32()
+    );
     if bank.format == SoundFormat::Vorbis {
         println!("note               : Vorbis payloads are Ogg-style packets (see libfsbvorbis64)");
     }
@@ -668,7 +676,11 @@ fn fsb_edit(args: &[String]) {
 
     match editor.build() {
         Ok(bytes) => match std::fs::write(output, &bytes) {
-            Ok(()) => println!("wrote {} ({changes} change(s), {} bytes)", output, bytes.len()),
+            Ok(()) => println!(
+                "wrote {} ({changes} change(s), {} bytes)",
+                output,
+                bytes.len()
+            ),
             Err(error) => {
                 eprintln!("Error: could not write {output}: {error}");
                 std::process::exit(1);
@@ -765,7 +777,11 @@ mod tests {
 
     #[test]
     fn parses_flag_values() {
-        let args = vec!["rea_bridge".to_string(), "fsb-info".to_string(), "b.fsb".to_string()];
+        let args = vec![
+            "rea_bridge".to_string(),
+            "fsb-info".to_string(),
+            "b.fsb".to_string(),
+        ];
         assert_eq!(flag_value(&args, "--output"), None);
 
         let args = vec![

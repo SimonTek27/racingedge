@@ -131,7 +131,10 @@ pub struct LoadedBank {
 impl LoadedBank {
     /// Playable sample count.
     pub fn playable_count(&self) -> usize {
-        self.handles.iter().filter(|handle| handle.is_some()).count()
+        self.handles
+            .iter()
+            .filter(|handle| handle.is_some())
+            .count()
     }
 
     /// Find a sample index by name.

@@ -6,6 +6,8 @@
 //! * [`editor`] — the content-modding editor suite (the audio editor today),
 //!   built on the formats recovered by REA reverse engineering.
 //! * [`plugins`] — the game-side Bevy plugins (physics).
+//! * [`net`] — runtime networking and telemetry (ksengine port).
 
 pub mod editor;
+pub mod net;
 pub mod plugins;

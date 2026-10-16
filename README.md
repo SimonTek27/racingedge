@@ -8,12 +8,20 @@ The suite currently targets **FSB5 sound banks** — the audio containers produc
 by the stock content-authoring tool — so custom audio content can be inspected,
 extracted and re-authored.
 
+[![CI](https://github.com/SimonTek27/racingedge/actions/workflows/ci.yml/badge.svg)](https://github.com/SimonTek27/racingedge/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/lib.rs` | Library root shared by the game and the CLI tools |
 | `src/editor/audio/mod.rs` | Facade that re-exports the [`ramod`](https://github.com/SimonTek27/RaMOD) FSB5 middleware |
+| `src/editor/audio/sounds_ini.rs` | `sounds.ini` event map (per-car / per-track audio routing) |
+| `src/editor/track/` | Track data: `data.json` metadata and the `surfaces.ini` grip grid |
+| `src/editor/ini.rs` | Ordered INI reader shared by the content editors |
+| `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
@@ -24,6 +32,7 @@ extracted and re-authored.
 | `tools/rea_analysis.cmd` | Runs the REA analysis that produced `evidence/` |
 | `REA_FINDINGS.md` | What REA revealed about the stock authoring tool (v2.03.13) |
 | `docs/REA_GUIDE.md` | How to run REA |
+| `docs/KSENGINE_PORT_BACKLOG.md` | What [`ksengine`](https://github.com/SimonTek27/ksengine) has that this project can grow into |
 
 The FSB5 parser/writer, the Vorbis ↔ Ogg tooling and the PCM → Vorbis encoder
 live in the **[`ramod`](https://github.com/SimonTek27/RaMOD)** crate (a git
@@ -35,12 +44,24 @@ dependency), so the game and the CLI share exactly one implementation;
 ```sh
 cargo build
 cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
 ```
 
-Both binaries build cleanly with **no warnings**. The FSB5/Vorbis/encoder unit
-tests now live in the [`ramod`](https://github.com/SimonTek27/RaMOD) crate; this
-repository's tests cover the Bevy audio bridge (sample → WAV/Ogg, summaries),
-the browser panel (row labels, reactive list rebuild) and the CLI helpers.
+CI runs all four on Windows (`.github/workflows/ci.yml`). Both binaries build
+cleanly with **no warnings**. The FSB5/Vorbis/encoder unit tests now live in the
+[`ramod`](https://github.com/SimonTek27/RaMOD) crate; this repository's tests
+cover the Bevy audio bridge (sample → WAV/Ogg, summaries), the browser panel
+(row labels, reactive list rebuild), the CLI helpers and the content/telemetry
+parsers.
+
+> **Note** — `src/simulator/` (vehicle physics, tyre model, cockpit, car audio)
+> is **not wired into the crate yet**: `src/lib.rs` only declares `editor` and
+> `plugins`, and that tree was written against a newer Bevy than the pinned
+> `bevy = "0.11"`, so declaring the module fails to compile. It is dead code
+> today. See
+> [docs/KSENGINE_PORT_BACKLOG.md § 0](docs/KSENGINE_PORT_BACKLOG.md) for the
+> migration decision this needs.
 
 ## The `rea_bridge` CLI
 
@@ -161,12 +182,26 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   and sample (rate, channels, duration, loop, playable container) and plays a
   sample when its row is clicked (`P` previews the first playable sample). The
   list rebuilds automatically whenever the library changes.
+* **Read track and audio metadata**: `Track::discover` loads a track's
+  `data.json` (name, spline length, width) and `surfaces.ini` grip grid, and
+  `SoundsIni` parses a car's or track's `sounds.ini` event map — the same data
+  the reference engine uses.
+* **Stream telemetry**: `TelemetryPlugin` broadcasts `KSIM` v2 frames (116 bytes,
+  speed/rpm/gear/inputs/position/lap/fuel/damage/tyres) on UDP `:20777` and TCP
+  `:20778`, with the same wire format and ports as the reference engine, so
+  existing dashboards and telemetry tools can consume them. Off by default:
+  opt in with `TelemetryConfig { enabled: true, ..default() }`.
 
 ## Roadmap
 
 1. Deeper REA verification of the FSB container code via `--snapshot`.
 2. Batch conversion and sample grafting (`--into` to add or replace a sample
    inside an existing bank).
+3. Resolve the Bevy version split in `src/simulator/`
+   ([port backlog § 0](docs/KSENGINE_PORT_BACKLOG.md)) so the vehicle runtime
+   compiles again.
+4. Continue the ksengine port backlog: track/model formats, fuel and timing,
+   session/flag state, multiplayer sync and the AC shared-memory bridge.
 
 ## License
 

@@ -199,13 +199,16 @@ fn rebuild_sample_list(
     }
 }
 
+/// Query delle righe del browser da ricolorare in base all'interazione.
+type RowHighlightQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static mut BackgroundColor),
+    (Changed<Interaction>, With<SampleRow>),
+>;
+
 /// Highlight rows on hover/press.
-fn update_row_colors(
-    mut rows: Query<
-        (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<SampleRow>),
-    >,
-) {
+fn update_row_colors(mut rows: RowHighlightQuery) {
     for (interaction, mut color) in &mut rows {
         *color = match interaction {
             Interaction::Pressed => ROW_PRESSED,
@@ -236,7 +239,10 @@ fn handle_sample_clicks(
 }
 
 /// Toggle the panel with `F1`.
-fn toggle_bank_browser(keys: Res<Input<KeyCode>>, mut roots: Query<&mut Style, With<BankBrowserRoot>>) {
+fn toggle_bank_browser(
+    keys: Res<Input<KeyCode>>,
+    mut roots: Query<&mut Style, With<BankBrowserRoot>>,
+) {
     if !keys.just_pressed(KeyCode::F1) {
         return;
     }

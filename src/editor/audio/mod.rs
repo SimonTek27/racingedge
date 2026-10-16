@@ -19,6 +19,7 @@
 //!   preview playback.
 //! * [`browser`] — the Bevy [`BankBrowserPlugin`]: an in-game panel listing every
 //!   loaded bank and sample.
+//! * [`sounds_ini`] — the `sounds.ini` event map (`SoundsIni`).
 //!
 //! The parsing/editing logic lives in [`ramod`] rather than in the game so the
 //! binary and the `rea_bridge` CLI share exactly one implementation.
@@ -27,8 +28,10 @@ pub use ramod::{fsb, fsb_write, vorbis, vorbis_encode};
 
 pub mod browser;
 pub mod plugin;
+pub mod sounds_ini;
 
 pub use browser::BankBrowserPlugin;
 pub use fsb::{Fsb5, SoundFormat};
 pub use fsb_write::{BankEditor, Fsb5Builder, Wav};
 pub use plugin::AudioPlugin;
+pub use sounds_ini::{SoundEvent, SoundsIni};
