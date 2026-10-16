@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor">
+  <rect width="64" height="64" rx="8" fill="none"/>
+  <!-- Redo arrow -->
+  <path d="M48 24H24a12 12 0 0 0 0 24h16v-8H24a4 4 0 0 1 0-8h24v-8z"/>
+  <path d="M52 16l6 6-6 6" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

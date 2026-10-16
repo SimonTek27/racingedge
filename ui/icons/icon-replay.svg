@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="doc">
+      <path d="M80,40 L320,40 L432,152 L432,472 Q432,488 416,488 L96,488 Q80,488 80,472 Z"/>
+    </clipPath>
+  </defs>
+  <!-- Shadow -->
+  <path d="M84,44 L324,44 L436,156 L436,476 Q436,492 420,492 L100,492 Q84,492 84,476 Z" fill="#00000022" transform="translate(4,4)"/>
+  <!-- Red left half -->
+  <path d="M80,40 L320,40 L432,152 L432,472 Q432,488 416,488 L96,488 Q80,488 80,472 Z" fill="#FF0000"/>
+  <!-- White right half -->
+  <path d="M256,40 L320,40 L432,152 L432,472 Q432,488 416,488 L256,488 Z" fill="#FFFFFF"/>
+  <!-- Folded corner -->
+  <path d="M320,40 L432,152 L320,152 Z" fill="#FFFFFF"/>
+  <path d="M320,40 L432,152 L320,152 Z" fill="none" stroke="#CCCCCC" stroke-width="2"/>
+  <!-- Center text -->
+  <text x="256" y="290" font-family="Arial Black, sans-serif" font-size="80" font-weight="900" text-anchor="middle" fill="#000000" stroke="#FFFFFF" stroke-width="8" paint-order="stroke fill">REPLAY</text>
+</svg>

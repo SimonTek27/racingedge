@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor">
+  <rect width="64" height="64" rx="8" fill="none"/>
+  <!-- Floppy with arrow -->
+  <path d="M14 10h26l10 10v34a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z"/>
+  <rect x="18" y="6" width="28" height="8" rx="2"/>
+  <rect x="18" y="26" width="28" height="22" rx="2"/>
+  <!-- Arrow to right -->
+  <path d="M40 34h10M46 28l4 3-4 3" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

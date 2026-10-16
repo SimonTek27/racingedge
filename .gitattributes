@@ -1,0 +1,10 @@
+# Normalise line endings in the repository (LF), regardless of the
+# platform setting of core.autocrlf.
+* text=auto eol=lf
+
+# Explicit binary assets
+*.bin binary
+*.png binary
+*.fsb binary
+*.wav binary
+*.ogg binary

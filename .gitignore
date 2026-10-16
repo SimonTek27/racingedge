@@ -1,0 +1,17 @@
+# Rust / Cargo build output
+/target
+**/*.rs.bk
+
+# Cargo+git worktrees
+.cargo/
+vendor/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# Local runtime artefacts (audio banks, editor output)
+/out/
+*.snapshot

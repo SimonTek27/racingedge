@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor">
+  <rect width="64" height="64" rx="8" fill="none"/>
+  <!-- Two overlapping documents -->
+  <path d="M12 16h28l12 12v28H12V16z" fill-opacity="0.5"/>
+  <path d="M20 8h28l12 12v28H20V8z"/>
+  <path d="M20 8h28l12 12v28H20V8z" fill="none"/>
+</svg>

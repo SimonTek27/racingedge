@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor">
+  <rect width="64" height="64" rx="8" fill="none"/>
+  <!-- Cut -->
+  <path d="M20 14h24l6 6v24l-6 6H20l-6-6V20l6-6z"/>
+  <path d="M20 14h24l6 6v24l-6 6H20l-6-6V20l6-6z" fill="none"/>
+  <!-- Blade lines -->
+  <line x1="14" y1="32" x2="50" y2="32" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="18" cy="14" r="3"/>
+  <circle cx="46" cy="14" r="3"/>
+  <circle cx="18" cy="50" r="3"/>
+  <circle cx="46" cy="50" r="3"/>
+</svg>

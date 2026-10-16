@@ -1,0 +1,12 @@
+[package]
+name = "racingedge"
+version = "0.1.0"
+edition = "2021"
+description = "Rust/Bevy racing game plus an FSB5 audio content-modding suite"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/SimonTek27/racingedge"
+readme = "README.md"
+
+[dependencies]
+bevy = "0.11"
+ramod = { git = "https://github.com/SimonTek27/RaMOD" }

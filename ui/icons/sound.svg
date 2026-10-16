@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor">
+  <rect width="64" height="64" rx="8" fill="none"/>
+  <!-- Sound waves -->
+  <path d="M8 32h4l4-12v32l-4-12H8z"/>
+  <path d="M16 32h4l4-16v32l-4-16H16z"/>
+  <path d="M24 32h4l4-20v40l-4-20H24z"/>
+  <path d="M32 32h4l4-16v32l-4-16H32z"/>
+  <path d="M40 32h4l4-12v24l-4-12H40z"/>
+  <path d="M48 32h4l4-8v16l-4-8H48z"/>
+</svg>
