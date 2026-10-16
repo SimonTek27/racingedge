@@ -27,8 +27,8 @@ impl Default for AeroConfig {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AeroForces {
-    pub drag: f32,       // N, opposes velocity
-    pub downforce: f32,  // N, positive = down
+    pub drag: f32,      // N, opposes velocity
+    pub downforce: f32, // N, positive = down
     pub cd: f32,
     pub cl: f32,
 }

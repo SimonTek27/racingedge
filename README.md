@@ -24,6 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -55,13 +56,11 @@ cover the Bevy audio bridge (sample → WAV/Ogg, summaries), the browser panel
 (row labels, reactive list rebuild), the CLI helpers and the content/telemetry
 parsers.
 
-> **Note** — `src/simulator/` (vehicle physics, tyre model, cockpit, car audio)
-> is **not wired into the crate yet**: `src/lib.rs` only declares `editor` and
-> `plugins`, and that tree was written against a newer Bevy than the pinned
-> `bevy = "0.11"`, so declaring the module fails to compile. It is dead code
-> today. See
-> [docs/KSENGINE_PORT_BACKLOG.md § 0](docs/KSENGINE_PORT_BACKLOG.md) for the
-> migration decision this needs.
+> **Note** — the project tracks the **latest released Bevy** and adapts to it
+> (see `AGENTS.md` "Rule 1"); it currently builds against **Bevy 0.20**.
+> `src/simulator/` is wired into the crate and compiled/tested by CI. Its systems
+> are not yet assembled into the game binary — that work is tracked in
+> [docs/KSENGINE_PORT_BACKLOG.md](docs/KSENGINE_PORT_BACKLOG.md).
 
 ## The `rea_bridge` CLI
 
@@ -197,9 +196,9 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
 1. Deeper REA verification of the FSB container code via `--snapshot`.
 2. Batch conversion and sample grafting (`--into` to add or replace a sample
    inside an existing bank).
-3. Resolve the Bevy version split in `src/simulator/`
-   ([port backlog § 0](docs/KSENGINE_PORT_BACKLOG.md)) so the vehicle runtime
-   compiles again.
+3. Assemble the `src/simulator/` runtime into the game binary (physics plugin,
+   cockpit HUD, car audio) — the plumbing is tracked in the
+   [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
 4. Continue the ksengine port backlog: track/model formats, fuel and timing,
    session/flag state, multiplayer sync and the AC shared-memory bridge.
 

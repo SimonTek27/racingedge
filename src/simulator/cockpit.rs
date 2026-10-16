@@ -55,7 +55,12 @@ impl DigitalFormat {
                 format!("{:0width$}", value.round() as i32, width = *width)
             }
             DigitalFormat::Decimal { width, frac } => {
-                format!("{:width$.frac$}", value, width = width + frac + 1, frac = *frac)
+                format!(
+                    "{:width$.frac$}",
+                    value,
+                    width = width + frac + 1,
+                    frac = *frac
+                )
             }
             DigitalFormat::Gear => match gear {
                 -1 => "R".into(),
@@ -271,11 +276,8 @@ pub struct AnalogNeedle;
 // =============================================================================
 
 /// Copia stato veicolo → telemetria cockpit.
-pub fn sync_telemetry(
-    mut tel: ResMut<CockpitTelemetry>,
-    q: Query<&VehicleState>,
-) {
-    let Ok(car) = q.get_single() else {
+pub fn sync_telemetry(mut tel: ResMut<CockpitTelemetry>, q: Query<&VehicleState>) {
+    let Ok(car) = q.single() else {
         return;
     };
     tel.speed_ms = car.speed.abs();
@@ -296,10 +298,7 @@ pub fn sync_telemetry(
 }
 
 /// Aggiorna testo dei display digitali.
-pub fn update_digital(
-    tel: Res<CockpitTelemetry>,
-    mut q: Query<(&DigitalInstrument, &mut Text)>,
-) {
+pub fn update_digital(tel: Res<CockpitTelemetry>, mut q: Query<(&DigitalInstrument, &mut Text)>) {
     for (inst, mut text) in &mut q {
         let raw = match inst.kind {
             DigitalType::Gear => 0.0,
@@ -321,7 +320,7 @@ pub fn update_digital(
         if let Some(ub) = inst.upper_bound {
             v = v.min(ub);
         }
-        **text = Text::new(inst.format.format_value(v, tel.gear));
+        **text = inst.format.format_value(v, tel.gear);
     }
 }
 
@@ -367,7 +366,7 @@ pub fn spawn_default_digital_hud(commands: &mut Commands) {
         Text::new("1"),
         style_base(620.0, 600.0),
         TextFont {
-            font_size: 64.0,
+            font_size: FontSize::Px(64.0),
             ..default()
         },
         TextColor(Color::srgb(1.0, 0.9, 0.2)),
@@ -379,7 +378,7 @@ pub fn spawn_default_digital_hud(commands: &mut Commands) {
         Text::new("000"),
         style_base(640.0, 520.0),
         TextFont {
-            font_size: 36.0,
+            font_size: FontSize::Px(36.0),
             ..default()
         },
         TextColor(Color::WHITE),
@@ -391,7 +390,7 @@ pub fn spawn_default_digital_hud(commands: &mut Commands) {
         Text::new("00000"),
         style_base(640.0, 700.0),
         TextFont {
-            font_size: 28.0,
+            font_size: FontSize::Px(28.0),
             ..default()
         },
         TextColor(Color::srgb(0.9, 0.9, 0.9)),
@@ -403,7 +402,7 @@ pub fn spawn_default_digital_hud(commands: &mut Commands) {
         Text::new("--:--.---"),
         style_base(12.0, 1000.0),
         TextFont {
-            font_size: 22.0,
+            font_size: FontSize::Px(22.0),
             ..default()
         },
         TextColor(Color::srgb(0.7, 1.0, 0.7)),
@@ -415,7 +414,7 @@ pub fn spawn_default_digital_hud(commands: &mut Commands) {
         Text::new("--:--.---"),
         style_base(40.0, 1000.0),
         TextFont {
-            font_size: 18.0,
+            font_size: FontSize::Px(18.0),
             ..default()
         },
         TextColor(Color::srgb(0.5, 0.8, 1.0)),

@@ -8,8 +8,15 @@
 //! Controls:
 //! * `F1` — show/hide the panel.
 //! * Click a sample — play it (looping samples loop).
+//!
+//! Input uses Bevy's picking events ([`PointerOver`], [`PointerOut`],
+//! [`PointerPress`], [`PointerRelease`], [`PointerClick`]) rather than the
+//! deprecated `Interaction` component.
 
 use bevy::prelude::*;
+// `bevy::prelude::Button` is only a deprecated alias in 0.20; the live widget
+// lives in `bevy_ui_widgets`.
+use bevy::ui_widgets::Button;
 
 use crate::editor::audio::plugin::{play_sample, BankLibrary, BankSampleSummary, LoadedBank};
 
@@ -31,11 +38,11 @@ pub struct SampleRow {
 }
 
 /// The panel's normal background colour.
-const ROW_IDLE: BackgroundColor = BackgroundColor(Color::rgba(1.0, 1.0, 1.0, 0.05));
+const ROW_IDLE: BackgroundColor = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05));
 /// The panel's hovered background colour.
-const ROW_HOVERED: BackgroundColor = BackgroundColor(Color::rgba(1.0, 1.0, 1.0, 0.18));
+const ROW_HOVERED: BackgroundColor = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.18));
 /// The panel's pressed background colour.
-const ROW_PRESSED: BackgroundColor = BackgroundColor(Color::rgba(0.30, 0.60, 1.0, 0.60));
+const ROW_PRESSED: BackgroundColor = BackgroundColor(Color::srgba(0.30, 0.60, 1.0, 0.60));
 
 /// One-line label describing a sample row.
 pub fn sample_row_label(summary: &BankSampleSummary) -> String {
@@ -66,7 +73,7 @@ impl Plugin for BankBrowserPlugin {
             Update,
             (
                 rebuild_sample_list,
-                update_row_colors,
+                paint_sample_rows,
                 handle_sample_clicks,
                 toggle_bank_browser,
             ),
@@ -77,44 +84,38 @@ impl Plugin for BankBrowserPlugin {
 /// Spawn a UI camera (if the game has none) and the empty panel skeleton.
 fn setup_bank_browser(mut commands: Commands, cameras: Query<(), With<Camera>>) {
     if cameras.is_empty() {
-        commands.spawn(Camera2dBundle::default());
+        commands.spawn(Camera2d);
     }
 
     commands
         .spawn((
-            NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(12.0),
-                    top: Val::Px(12.0),
-                    width: Val::Px(520.0),
-                    max_height: Val::Percent(88.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    ..default()
-                },
-                background_color: BackgroundColor(Color::rgba(0.0, 0.0, 0.0, 0.72)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(12.0),
+                top: Val::Px(12.0),
+                width: Val::Px(520.0),
+                max_height: Val::Percent(88.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::all(Val::Px(10.0)),
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.72)),
             BankBrowserRoot,
         ))
         .with_children(|root| {
-            root.spawn(TextBundle::from_section(
-                "Bank Browser   (F1 to toggle, click a sample to play)",
-                TextStyle {
-                    font_size: 15.0,
-                    color: Color::rgb(0.95, 0.95, 0.95),
+            root.spawn((
+                Text::new("Bank Browser   (F1 to toggle, click a sample to play)"),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
+                TextColor(Color::srgb(0.95, 0.95, 0.95)),
             ));
             root.spawn((
-                NodeBundle {
-                    style: Style {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(2.0),
-                        ..default()
-                    },
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
                     ..default()
                 },
                 SampleList,
@@ -134,20 +135,22 @@ fn rebuild_sample_list(
     }
     *initialized = true;
 
-    let Ok(list_entity) = list.get_single() else {
+    let Ok(list_entity) = list.single() else {
         return;
     };
-    commands.entity(list_entity).despawn_descendants();
+    commands.entity(list_entity).despawn_related::<Children>();
 
     if library.is_empty() {
         commands.entity(list_entity).with_children(|list| {
-            list.spawn(TextBundle::from_section(
-                "No banks loaded. Set RACINGEDGE_BANKS or add .fsb files to assets/audio/.",
-                TextStyle {
-                    font_size: 12.0,
-                    color: Color::rgb(0.75, 0.75, 0.75),
+            list.spawn((
+                Text::new(
+                    "No banks loaded. Set RACINGEDGE_BANKS or add .fsb files to assets/audio/.",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
+                TextColor(Color::srgb(0.75, 0.75, 0.75)),
             ));
         });
         return;
@@ -156,13 +159,13 @@ fn rebuild_sample_list(
     for (bank_index, bank) in library.banks.iter().enumerate() {
         let header = bank_header(bank_index, bank);
         commands.entity(list_entity).with_children(|list| {
-            list.spawn(TextBundle::from_section(
-                header,
-                TextStyle {
-                    font_size: 13.0,
-                    color: Color::rgb(0.80, 0.86, 1.0),
+            list.spawn((
+                Text::new(header),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
+                TextColor(Color::srgb(0.80, 0.86, 1.0)),
             ));
         });
 
@@ -172,62 +175,70 @@ fn rebuild_sample_list(
                 bank: bank_index,
                 sample: sample_index,
             };
+            // The label lives on the row entity itself, so the row is the
+            // picking target for hover and click.
             commands.entity(list_entity).with_children(|list| {
                 list.spawn((
-                    ButtonBundle {
-                        style: Style {
-                            padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                            ..default()
-                        },
-                        background_color: ROW_IDLE,
+                    Button,
+                    Node {
+                        padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
                         ..default()
                     },
+                    ROW_IDLE,
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(12.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.88, 0.88, 0.88)),
                     row,
-                ))
-                .with_children(|button| {
-                    button.spawn(TextBundle::from_section(
-                        label,
-                        TextStyle {
-                            font_size: 12.0,
-                            color: Color::rgb(0.88, 0.88, 0.88),
-                            ..default()
-                        },
-                    ));
-                });
+                ));
             });
         }
     }
 }
 
-/// Query delle righe del browser da ricolorare in base all'interazione.
-type RowHighlightQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Interaction, &'static mut BackgroundColor),
-    (Changed<Interaction>, With<SampleRow>),
->;
-
-/// Highlight rows on hover/press.
-fn update_row_colors(mut rows: RowHighlightQuery) {
-    for (interaction, mut color) in &mut rows {
-        *color = match interaction {
-            Interaction::Pressed => ROW_PRESSED,
-            Interaction::Hovered => ROW_HOVERED,
-            Interaction::None => ROW_IDLE,
-        };
+/// Recolour rows as the pointer hovers and presses them.
+fn paint_sample_rows(
+    mut over: MessageReader<PointerOver>,
+    mut out: MessageReader<PointerOut>,
+    mut press: MessageReader<PointerPress>,
+    mut release: MessageReader<PointerRelease>,
+    mut rows: Query<&mut BackgroundColor, With<SampleRow>>,
+) {
+    for event in over.read() {
+        if let Ok(mut color) = rows.get_mut(event.event_target()) {
+            *color = ROW_HOVERED;
+        }
+    }
+    for event in out.read() {
+        if let Ok(mut color) = rows.get_mut(event.event_target()) {
+            *color = ROW_IDLE;
+        }
+    }
+    for event in press.read() {
+        if let Ok(mut color) = rows.get_mut(event.event_target()) {
+            *color = ROW_PRESSED;
+        }
+    }
+    for event in release.read() {
+        if let Ok(mut color) = rows.get_mut(event.event_target()) {
+            *color = ROW_HOVERED;
+        }
     }
 }
 
 /// Play a sample when its row is clicked.
 fn handle_sample_clicks(
-    rows: Query<(&Interaction, &SampleRow), Changed<Interaction>>,
+    mut clicks: MessageReader<PointerClick>,
+    rows: Query<&SampleRow>,
     library: Res<BankLibrary>,
     mut commands: Commands,
 ) {
-    for (interaction, row) in &rows {
-        if *interaction != Interaction::Pressed {
+    for click in clicks.read() {
+        let Ok(row) = rows.get(click.event_target()) else {
             continue;
-        }
+        };
         let looped = library
             .banks
             .get(row.bank)
@@ -240,17 +251,17 @@ fn handle_sample_clicks(
 
 /// Toggle the panel with `F1`.
 fn toggle_bank_browser(
-    keys: Res<Input<KeyCode>>,
-    mut roots: Query<&mut Style, With<BankBrowserRoot>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut roots: Query<&mut Node, With<BankBrowserRoot>>,
 ) {
     if !keys.just_pressed(KeyCode::F1) {
         return;
     }
-    for mut style in &mut roots {
-        style.display = if style.display == bevy::ui::Display::None {
-            bevy::ui::Display::Flex
+    for mut node in &mut roots {
+        node.display = if node.display == Display::None {
+            Display::Flex
         } else {
-            bevy::ui::Display::None
+            Display::None
         };
     }
 }
@@ -306,7 +317,7 @@ mod tests {
     fn browser_rows_track_the_library() {
         let mut app = App::new();
         app.init_resource::<BankLibrary>();
-        app.world.spawn(SampleList);
+        app.world_mut().spawn(SampleList);
         app.add_systems(Update, rebuild_sample_list);
 
         // First frame: empty library -> placeholder, no rows.
@@ -315,7 +326,7 @@ mod tests {
 
         // Add a bank with two samples: the next update rebuilds the list.
         {
-            let mut library = app.world.resource_mut::<BankLibrary>();
+            let mut library = app.world_mut().resource_mut::<BankLibrary>();
             library.banks.push(LoadedBank {
                 path: "engine.fsb".to_string(),
                 format: SoundFormat::Pcm16,
@@ -328,6 +339,8 @@ mod tests {
     }
 
     fn count_rows(app: &mut App) -> usize {
-        app.world.query::<&SampleRow>().iter(&app.world).count()
+        let world = app.world_mut();
+        let mut query = world.query::<&SampleRow>();
+        query.iter(world).count()
     }
 }

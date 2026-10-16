@@ -79,6 +79,10 @@ pub fn step_engine(
     }
     state.rpm = state.rpm.clamp(cfg.rpm_idle * 0.8, cfg.rpm_limiter + 200.0);
 
-    let cut = if state.rpm >= cfg.rpm_limiter { 0.0 } else { 1.0 };
+    let cut = if state.rpm >= cfg.rpm_limiter {
+        0.0
+    } else {
+        1.0
+    };
     state.torque_nm = cfg.torque_at_rpm(state.rpm) * state.throttle * cut;
 }

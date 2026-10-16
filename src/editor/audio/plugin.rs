@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use bevy::audio::{AudioBundle, AudioSource as BevyAudioSource, PlaybackSettings};
+use bevy::audio::{AudioPlayer, AudioSource as BevyAudioSource, PlaybackSettings};
 use bevy::prelude::*;
 
 use crate::editor::audio::fsb::{Fsb5, SoundFormat};
@@ -216,10 +216,7 @@ pub fn play_sample(
     } else {
         PlaybackSettings::ONCE
     };
-    commands.spawn(AudioBundle {
-        source: handle.clone(),
-        settings,
-    });
+    commands.spawn((AudioPlayer::new(handle.clone()), settings));
     true
 }
 
@@ -246,7 +243,7 @@ fn spawn_audio(mut commands: Commands) {
     });
 }
 
-fn update_audio(_time: Res<Time>, mut query: Query<(&mut AudioSource,)>) {
+fn update_audio(_time: Res<Time>, mut query: Query<&mut AudioSource>) {
     for _audio in &mut query {
         // Placeholder: parameter automation would be applied here.
     }
@@ -295,8 +292,12 @@ fn load_configured_banks(
 }
 
 /// Press `P` to preview the first playable sample of the first loaded bank.
-fn preview_banks(keys: Res<Input<KeyCode>>, library: Res<BankLibrary>, mut commands: Commands) {
-    if !keys.just_pressed(KeyCode::P) {
+fn preview_banks(
+    keys: Res<ButtonInput<KeyCode>>,
+    library: Res<BankLibrary>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyP) {
         return;
     }
     let Some(bank) = library.banks.first() else {

@@ -86,10 +86,10 @@ pub struct TireAxleData {
 
 #[derive(Clone, Debug)]
 pub struct SuspensionData {
-    pub spring_rate: f32,  // N/m (wheel rate approx)
-    pub damper: f32,       // N·s/m
-    pub ride_height: f32,  // m
-    pub bump_lut: Lut1D,   // velocity → force scale
+    pub spring_rate: f32, // N/m (wheel rate approx)
+    pub damper: f32,      // N·s/m
+    pub ride_height: f32, // m
+    pub bump_lut: Lut1D,  // velocity → force scale
     pub rebound_lut: Lut1D,
 }
 
@@ -264,8 +264,7 @@ impl CarPhysicsData {
 
     pub fn load_from_json(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
-        let text = fs::read_to_string(path)
-            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         let dir = path
             .parent()
             .map(|p| p.to_path_buf())
@@ -541,7 +540,6 @@ impl CarPhysicsData {
         }
     }
 
-
     /// Converte nel VehicleConfig usato dal modulo physics.
     pub fn to_vehicle_config(&self) -> VehicleConfig {
         VehicleConfig {
@@ -615,7 +613,9 @@ impl CarPhysicsData {
             pressure_r: self.tire_rear.pressure_static,
             camber_f: self.tire_front.camber_static_deg,
             camber_r: self.tire_rear.camber_static_deg,
-            rolling_res: (self.tire_front.rolling_resistance_0 + self.tire_rear.rolling_resistance_0) * 0.5,
+            rolling_res: (self.tire_front.rolling_resistance_0
+                + self.tire_rear.rolling_resistance_0)
+                * 0.5,
             yaw_inertia: self.yaw_inertia(),
         }
     }
@@ -785,13 +785,13 @@ fn parse_tire_axle(text: &str, front: bool) -> TireAxleData {
 fn extract_str(text: &str, key: &str) -> Option<String> {
     let pat = format!("\"{key}\"");
     let idx = text.find(&pat)?;
-    let after = text[idx + pat.len()..].trim_start().trim_start_matches(':').trim_start();
-    if after.starts_with('"') {
-        let end = after[1..].find('"')?;
-        Some(after[1..1 + end].to_string())
-    } else {
-        None
-    }
+    let after = text[idx + pat.len()..]
+        .trim_start()
+        .trim_start_matches(':')
+        .trim_start();
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
 }
 
 fn extract_f32(text: &str, key: &str) -> Option<f32> {
@@ -803,14 +803,14 @@ fn extract_all_f32(text: &str, key: &str) -> Vec<f32> {
     let mut out = Vec::new();
     let mut search = text;
     while let Some(idx) = search.find(&pat) {
-        let after = search[idx + pat.len()..].trim_start().trim_start_matches(':').trim_start();
-        let s = if after.starts_with('"') {
-            after[1..].split('"').next().unwrap_or("")
+        let after = search[idx + pat.len()..]
+            .trim_start()
+            .trim_start_matches(':')
+            .trim_start();
+        let s = if let Some(stripped) = after.strip_prefix('"') {
+            stripped.split('"').next().unwrap_or("")
         } else {
-            after
-                .split(|c: char| c == ',' || c == '}' || c == '\n' || c == ' ')
-                .next()
-                .unwrap_or("")
+            after.split([',', '}', '\n', ' ']).next().unwrap_or("")
         };
         if let Ok(v) = s.trim().parse::<f32>() {
             out.push(v);
@@ -840,7 +840,7 @@ fn extract_torque_curve(text: &str) -> Option<Vec<(f32, f32)>> {
     }
     let arr = &text[arr_start..end];
     let mut nums = Vec::new();
-    for part in arr.split(|c: char| c == '[' || c == ']' || c == ',') {
+    for part in arr.split(['[', ']', ',']) {
         if let Ok(v) = part.trim().parse::<f32>() {
             nums.push(v);
         }

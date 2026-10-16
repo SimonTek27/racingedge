@@ -11,7 +11,7 @@
 //! AcImporter::from_car_folder(path)?.write_json("assets/car_data/data.json")?;
 //! ```
 
-use crate::simulator::car_data::{CarPhysicsData, ErsData, SuspensionData, TireAxleData};
+use crate::simulator::car_data::{CarPhysicsData, ErsData, TireAxleData};
 use crate::simulator::lut::Lut1D;
 use std::collections::HashMap;
 use std::fs;
@@ -116,9 +116,10 @@ impl AcImporter {
         let car_dir = car_dir.as_ref().to_path_buf();
         let data_dir = if car_dir.join("data").is_dir() {
             car_dir.join("data")
-        } else if car_dir.file_name().map(|n| n == "data").unwrap_or(false) {
-            car_dir.clone()
-        } else if car_dir.join("car.ini").exists() || car_dir.join("engine.ini").exists() {
+        } else if car_dir.file_name().is_some_and(|n| n == "data")
+            || car_dir.join("car.ini").exists()
+            || car_dir.join("engine.ini").exists()
+        {
             car_dir.clone()
         } else {
             return Err(format!(
@@ -134,8 +135,8 @@ impl AcImporter {
             .to_string();
 
         let mut files = HashMap::new();
-        let entries = fs::read_dir(&data_dir)
-            .map_err(|e| format!("read_dir {}: {e}", data_dir.display()))?;
+        let entries =
+            fs::read_dir(&data_dir).map_err(|e| format!("read_dir {}: {e}", data_dir.display()))?;
         for e in entries.flatten() {
             let path = e.path();
             if path.extension().and_then(|x| x.to_str()) == Some("ini") {
@@ -156,9 +157,7 @@ impl AcImporter {
         if files.is_empty() {
             // forse solo data.json già convertito
             if data_dir.join("data.json").exists() {
-                return Err(
-                    "solo data.json presente: usa CarPhysicsData::load_from_json".into(),
-                );
+                return Err("solo data.json presente: usa CarPhysicsData::load_from_json".into());
             }
             return Err(format!("nessun .ini in {}", data_dir.display()));
         }
@@ -184,13 +183,18 @@ impl AcImporter {
 
     /// Converte in `CarPhysicsData` (stesso tipo del pack JSON).
     pub fn to_physics_data(&self) -> CarPhysicsData {
-        let mut d = CarPhysicsData::default();
-        d.name = self.name.clone();
-        d.data_dir = self.data_dir.clone();
+        let mut d = CarPhysicsData {
+            name: self.name.clone(),
+            data_dir: self.data_dir.clone(),
+            ..Default::default()
+        };
 
         // --- car.ini ---
         if let Some(car) = self.ini("car") {
-            if let Some(v) = car.get_f32("BASIC", "TOTALMASS").or_else(|| car.get_f32("INFO", "TOTALMASS")) {
+            if let Some(v) = car
+                .get_f32("BASIC", "TOTALMASS")
+                .or_else(|| car.get_f32("INFO", "TOTALMASS"))
+            {
                 d.mass_kg = v;
             }
             if let Some(v) = car.get_f32("BASIC", "INERTIA") {
@@ -297,7 +301,10 @@ impl AcImporter {
 
         // damper / spring from tyres RATE DAMP if present
         if let Some(ty) = self.ini("tyres") {
-            if let Some(v) = ty.get_f32("FRONT", "DAMP").or_else(|| ty.get_f32("FRONT", "RATE")) {
+            if let Some(v) = ty
+                .get_f32("FRONT", "DAMP")
+                .or_else(|| ty.get_f32("FRONT", "RATE"))
+            {
                 if v < 10_000.0 {
                     d.susp_front.damper = v * 8.0;
                 } else {
@@ -331,10 +338,16 @@ impl AcImporter {
 
         // aero.ini
         if let Some(aero) = self.ini("aero") {
-            if let Some(v) = aero.get_f32("DATA", "CD").or_else(|| aero.get_f32("FRONT", "CD")) {
+            if let Some(v) = aero
+                .get_f32("DATA", "CD")
+                .or_else(|| aero.get_f32("FRONT", "CD"))
+            {
                 d.aero_cd = v;
             }
-            if let Some(v) = aero.get_f32("DATA", "CL").or_else(|| aero.get_f32("REAR", "CL_GAIN")) {
+            if let Some(v) = aero
+                .get_f32("DATA", "CL")
+                .or_else(|| aero.get_f32("REAR", "CL_GAIN"))
+            {
                 d.aero_cl = v.abs();
             }
         }
@@ -402,7 +415,10 @@ impl AcImporter {
     }
 
     /// Import + copia LUT utili in `assets/car_data/`.
-    pub fn install_as_assets(&self, assets_car_data: impl AsRef<Path>) -> Result<CarPhysicsData, String> {
+    pub fn install_as_assets(
+        &self,
+        assets_car_data: impl AsRef<Path>,
+    ) -> Result<CarPhysicsData, String> {
         let dest = assets_car_data.as_ref();
         fs::create_dir_all(dest).map_err(|e| e.to_string())?;
         self.write_json(dest.join("data.json"))?;

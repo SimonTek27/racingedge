@@ -2,11 +2,15 @@
 name = "racingedge"
 version = "0.1.0"
 edition = "2021"
+# Bevy 0.20's MSRV; the toolchain adapts to Bevy, so this tracks it.
+rust-version = "1.97.1"
 description = "Rust/Bevy racing game plus an FSB5 audio content-modding suite"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/SimonTek27/racingedge"
 readme = "README.md"
 
 [dependencies]
-bevy = "0.11"
+# Bevy is always tracked at the latest release: racingedge adapts to Bevy, never
+# the other way round. See AGENTS.md, "Rule 1".
+bevy = "0.20"
 ramod = { git = "https://github.com/SimonTek27/RaMOD" }

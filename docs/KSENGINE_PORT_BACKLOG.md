@@ -14,41 +14,38 @@ descriptive — it is not a commitment, and nothing here is scheduled.
 
 ---
 
-## 0. Known blocker: the `src/simulator/` tree is not compiled
+## 0. Resolved: the whole `src/simulator/` tree is now compiled
 
-`src/lib.rs` only declares `editor` and `plugins`; nothing declares
-`mod simulator`, so the whole `src/simulator/` tree (13 modules: physics, tyre,
-aero, suspension, brakes, drivetrain, electronics, cockpit, car data, AC import,
-car sound, rebank, LUT) is **dead code today** — `cargo build` and
-`cargo test` never see it.
+`src/lib.rs` declares `pub mod simulator;`, so the entire simulator tree
+(physics, tyre, engine, aero, suspension, brakes, drivetrain, electronics,
+cockpit, car data, AC import, car sound, rebank, LUT) is part of the library, the
+game binary and the CLI, and is built and tested by CI.
 
-Wiring it in (`pub mod simulator;`) fails with **38 errors**, because the tree
-was written against a *newer* Bevy than the pinned `bevy = "0.11"`:
+The blocker was that `src/simulator/` was written against a *newer* Bevy than
+the then-pinned `bevy = "0.11"`, while `src/editor/audio/*` and
+`src/plugins/*` used 0.11 APIs (`PbrBundle`, `TextBundle::from_section`,
+`AudioBundle`, `Time::delta_seconds`). The repo held two incompatible halves.
 
-| Symptom | Bevy version it belongs to |
-| --- | --- |
-| `Text::new`, `TextFont`, `TextColor` | 0.15+ |
-| `Mesh3d`, `MeshMaterial3d` (no `PbrBundle`) | 0.15+ |
-| `Cylinder`, `Cuboid` in the prelude | 0.14+ |
-| `Time::delta_secs` / `elapsed_secs` | 0.14+ |
-| `Color::srgb` | 0.14+ |
-| `Node { position_type, top, left }` | 0.14+ |
+**Resolution:** `bevy` was upgraded to the latest release (**0.20**) and *our
+code was changed to match Bevy*, as `AGENTS.md` Rule 1 requires — no pinning,
+patching, vendoring or forking:
 
-Meanwhile `src/editor/audio/*` and `src/plugins/*` use 0.11 APIs
-(`PbrBundle`, `TextBundle::from_section`, `Time::delta_seconds`). So the repo
-currently holds two incompatible halves.
+* `editor/audio/plugin.rs`, `editor/audio/browser.rs` and `plugins/physics.rs`
+  moved to required components (`Mesh3d`/`MeshMaterial3d`, `AudioPlayer`),
+  `Node`-based UI with `Text`/`TextFont`/`TextColor`/`FontSize`, `ButtonInput`,
+  `Color::srgb`, and picking events (`PointerOver`/`PointerPress`/`PointerClick`)
+  instead of the deprecated `Interaction` component.
+* the simulator tree needed only small fixes — `Query::single`,
+  `FontSize::Px(..)`, `Text`'s `Deref<Target = String>`, and a borrow split in
+  `car_sound.rs`.
 
-**P0 decision to make:** either
+Two migration gotchas worth remembering:
 
-1. **upgrade** `bevy` to the version the simulator targets (0.15/0.16) and fix
-   `editor/audio/*` + `plugins/physics.rs` for the new API, then add
-   `pub mod simulator;` — this unlocks ~150 KB of existing game code; or
-2. **port the simulator tree down** to 0.11 (mechanical, but touches 5+ files
-   and loses the newer-API work).
-
-Until that is resolved, new code goes in the modules that *do* compile
-(`editor/*`, `net/*`, `plugins/*`) — which is what the items below marked
-*delivered* did.
+* Bevy 0.20 requires `rust-version = 1.97.1`; local and CI toolchains are ≥ 1.99.
+* a **stale `Cargo.lock`** from the 0.11 era resolved *two* incompatible
+  `windows` crates (`0.58`, pulled by `gilrs`, and `0.62`, pulled by
+  `gpu-allocator`/`wgpu-hal`) and broke the `wgpu-hal` DX12 build. Regenerating
+  the lock (`cargo generate-lockfile`) unifies them on `0.62`.
 
 ---
 
@@ -61,9 +58,10 @@ Until that is resolved, new code goes in the modules that *do* compile
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
+| **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
-and `cargo test --all-targets` all pass (49 tests).
+and `cargo test --all-targets` all pass (49 unit tests + 1 doc test).
 
 ---
 

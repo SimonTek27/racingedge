@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::simulator::physics::{VehicleConfig, VehicleState};
-use crate::simulator::rebank::{self, ensure_default_rebank, load_rebank, RebankBuilder};
+use crate::simulator::rebank::{ensure_default_rebank, load_rebank, RebankBuilder};
 
 // =============================================================================
 // CATEGORIE (ks::sim::SimulatorAudio::SoundCategory)
@@ -118,11 +118,8 @@ pub enum CommonSoundCategory {
 }
 
 impl CommonSoundCategory {
-    pub const WEATHER: [CommonSoundCategory; 3] = [
-        Self::RainAmbient,
-        Self::RainCar,
-        Self::RainThunder,
-    ];
+    pub const WEATHER: [CommonSoundCategory; 3] =
+        [Self::RainAmbient, Self::RainCar, Self::RainThunder];
 
     /// Tutte le superfici di rolling (contatto continuo).
     pub const fn surface_rolling(i: usize) -> Option<CommonSoundCategory> {
@@ -392,25 +389,23 @@ impl CarSoundBankMeta {
 fn json_str(text: &str, key: &str) -> Option<String> {
     let pat = format!("\"{key}\"");
     let idx = text.find(&pat)?;
-    let after = text[idx + pat.len()..].trim_start().trim_start_matches(':').trim_start();
-    if after.starts_with('"') {
-        let end = after[1..].find('"')?;
-        Some(after[1..1 + end].to_string())
-    } else {
-        None
-    }
+    let after = text[idx + pat.len()..]
+        .trim_start()
+        .trim_start_matches(':')
+        .trim_start();
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
 }
 
 fn json_f32(text: &str, key: &str) -> Option<f32> {
     let pat = format!("\"{key}\"");
     let idx = text.find(&pat)?;
-    let after = text[idx + pat.len()..].trim_start().trim_start_matches(':').trim_start();
-    after
-        .split(|c: char| c == ',' || c == '}' || c == '\n')
-        .next()?
-        .trim()
-        .parse()
-        .ok()
+    let after = text[idx + pat.len()..]
+        .trim_start()
+        .trim_start_matches(':')
+        .trim_start();
+    after.split([',', '}', '\n']).next()?.trim().parse().ok()
 }
 
 // =============================================================================
@@ -489,9 +484,7 @@ impl Default for CarSound {
                 meta.bank_file
             );
         } else {
-            eprintln!(
-                "[car_sound] bank assente → solo sintesi (come generateSynthEngineLayer)"
-            );
+            eprintln!("[car_sound] bank assente → solo sintesi (come generateSynthEngineLayer)");
         }
         s
     }
@@ -557,7 +550,10 @@ impl CarSound {
     }
 
     /// Rigenera il pack `.rebank` su disco (tool / editor).
-    pub fn rebuild_rebank(&mut self, parent: impl AsRef<std::path::Path>) -> Result<std::path::PathBuf, String> {
+    pub fn rebuild_rebank(
+        &mut self,
+        parent: impl AsRef<std::path::Path>,
+    ) -> Result<std::path::PathBuf, String> {
         let path = RebankBuilder::new(&self.meta.bank_stem, parent)
             .with_rpm_range(self.meta.rpm_min, self.meta.rpm_max)
             .build_from_synth()?;
@@ -597,10 +593,11 @@ impl CarSound {
                 let _ = (len, speed);
             }
         }
+        let engine_gain = self.engine_gain();
         let ext = &mut self.playback[SoundCategory::EngineExterior as usize];
         ext.playing = true;
         ext.pitch = (p.rpm / 4000.0).clamp(0.4, 2.2);
-        ext.volume = self.engine_gain();
+        ext.volume = engine_gain;
 
         let wind = &mut self.playback[SoundCategory::Wind as usize];
         wind.playing = p.speed > 5.0;
@@ -610,8 +607,11 @@ impl CarSound {
             if self.backfire_timer > 0.0 { 0.9 } else { 0.0 };
         self.playback[SoundCategory::Limiter as usize].volume =
             if self.limiter_timer > 0.0 { 0.7 } else { 0.0 };
-        self.playback[SoundCategory::GearShift as usize].volume =
-            if self.gear_shift_timer > 0.0 { 0.8 } else { 0.0 };
+        self.playback[SoundCategory::GearShift as usize].volume = if self.gear_shift_timer > 0.0 {
+            0.8
+        } else {
+            0.0
+        };
 
         self.last_mix_peak = self.estimate_peak();
     }
@@ -668,11 +668,14 @@ pub fn update_car_sound(
     if !sound.enabled {
         return;
     }
-    let Ok(car) = q.get_single() else {
+    let Ok(car) = q.single() else {
         return;
     };
     let p = AudioPhysicsState {
-        rpm: car.engine.rpm.clamp(sound.meta.rpm_min * 0.5, sound.meta.rpm_max * 1.05),
+        rpm: car
+            .engine
+            .rpm
+            .clamp(sound.meta.rpm_min * 0.5, sound.meta.rpm_max * 1.05),
         throttle: car.throttle,
         brake: car.brake,
         speed: car.speed.abs(),
@@ -689,7 +692,7 @@ pub fn debug_car_sound(time: Res<Time>, sound: Res<CarSound>) {
     if time.elapsed_secs().fract() > 0.05 {
         return;
     }
-    if (time.elapsed_secs() as u32) % 2 != 0 {
+    if !(time.elapsed_secs() as u32).is_multiple_of(2) {
         return;
     }
     eprintln!(
@@ -698,11 +701,14 @@ pub fn debug_car_sound(time: Res<Time>, sound: Res<CarSound>) {
         sound.state.rpm,
         sound.state.throttle * 100.0,
         sound.last_mix_peak,
-        if sound.using_synth { "synth-layers" } else { "bank-pcm" },
+        if sound.using_synth {
+            "synth-layers"
+        } else {
+            "bank-pcm"
+        },
         sound.engine_ext_event()
     );
 }
-
 
 // =============================================================================
 // COMMON AUDIO (pista / meteo / superfici) — fuori dal .rebank macchina

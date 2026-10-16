@@ -7,9 +7,7 @@ use crate::simulator::drivetrain::{self, DrivetrainConfig, DrivetrainState};
 use crate::simulator::electronics::{self, ErsConfig};
 use crate::simulator::engine::{self, EngineConfig, EngineState};
 use crate::simulator::suspension::{self, SuspensionConfig};
-use crate::simulator::tire::{
-    slip_angle_front, slip_angle_rear, MagicFormulaTire, TireState,
-};
+use crate::simulator::tire::{slip_angle_front, slip_angle_rear, MagicFormulaTire, TireState};
 use bevy::prelude::*;
 
 /// Config immutabile derivata dal data pack.
@@ -232,14 +230,7 @@ pub fn step_vehicle(cfg: &VehicleConfig, car: &mut VehicleState, dt: f32) {
     }
 
     if car.brake > 0.05 {
-        let b = brakes::compute_brakes(
-            &cfg.brakes,
-            car.brake,
-            car.speed,
-            r,
-            peak_f,
-            peak_r,
-        );
+        let b = brakes::compute_brakes(&cfg.brakes, car.brake, car.speed, r, peak_f, peak_r);
         fx_f = b.fx_front;
         fx_r = b.fx_rear;
     }
@@ -248,12 +239,9 @@ pub fn step_vehicle(cfg: &VehicleConfig, car: &mut VehicleState, dt: f32) {
     car.fy_total = fy_f + fy_r;
 
     // EOM
-    let weight = cfg.mass * 9.81;
     let rr = cfg.rolling_res * 0.15 * car.speed.signum();
-    let fx_net = fx_f * car.steer_angle.cos() + fx_r
-        - car.aero.drag
-        - rr
-        - fy_f * car.steer_angle.sin();
+    let fx_net =
+        fx_f * car.steer_angle.cos() + fx_r - car.aero.drag - rr - fy_f * car.steer_angle.sin();
     let ax = fx_net / cfg.mass;
     car.speed += ax * dt;
     if car.speed.abs() < 0.25 && car.brake > 0.5 {
@@ -278,13 +266,19 @@ pub fn step_vehicle(cfg: &VehicleConfig, car: &mut VehicleState, dt: f32) {
 }
 
 fn pack_fx(dx_ref: f32, fz: f32, fz0: f32, ls_exp: f32, kappa: f32) -> f32 {
-    let sens = (fz / fz0.max(1.0)).max(0.1).powf(ls_exp.clamp(0.4, 1.2)).clamp(0.5, 1.3);
+    let sens = (fz / fz0.max(1.0))
+        .max(0.1)
+        .powf(ls_exp.clamp(0.4, 1.2))
+        .clamp(0.5, 1.3);
     let shape = kappa.signum() * (kappa.abs() / 0.12).min(1.0);
     dx_ref * fz * sens * shape
 }
 
 fn pack_fy(dy_ref: f32, fz: f32, fz0: f32, ls_exp: f32, alpha: f32, peak: f32) -> f32 {
-    let sens = (fz / fz0.max(1.0)).max(0.1).powf(ls_exp.clamp(0.4, 1.2)).clamp(0.5, 1.3);
+    let sens = (fz / fz0.max(1.0))
+        .max(0.1)
+        .powf(ls_exp.clamp(0.4, 1.2))
+        .clamp(0.5, 1.3);
     let shape = alpha.signum() * (alpha.abs() / peak.max(0.05)).min(1.0);
     dy_ref * fz * sens * shape
 }

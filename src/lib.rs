@@ -7,7 +7,9 @@
 //!   built on the formats recovered by REA reverse engineering.
 //! * [`plugins`] — the game-side Bevy plugins (physics).
 //! * [`net`] — runtime networking and telemetry (ksengine port).
+//! * [`simulator`] — the runtime vehicle simulator (ksengine port).
 
 pub mod editor;
 pub mod net;
 pub mod plugins;
+pub mod simulator;

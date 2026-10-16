@@ -118,11 +118,7 @@ impl RebankManifest {
                 ev.id, ev.category
             ));
         }
-        let params: Vec<String> = self
-            .parameters
-            .iter()
-            .map(|p| format!("\"{p}\""))
-            .collect();
+        let params: Vec<String> = self.parameters.iter().map(|p| format!("\"{p}\"")).collect();
         format!(
             r#"{{
   "name": "{}",
@@ -231,12 +227,9 @@ fn json_str(text: &str, key: &str) -> Option<String> {
         .trim_start()
         .trim_start_matches(':')
         .trim_start();
-    if after.starts_with('"') {
-        let end = after[1..].find('"')?;
-        Some(after[1..1 + end].to_string())
-    } else {
-        None
-    }
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
 }
 
 fn json_f32(text: &str, key: &str) -> Option<f32> {
@@ -247,7 +240,7 @@ fn json_f32(text: &str, key: &str) -> Option<f32> {
         .trim_start_matches(':')
         .trim_start();
     after
-        .split(|c: char| c == ',' || c == '}' || c == '\n' || c == ' ')
+        .split([',', '}', '\n', ' '])
         .next()?
         .trim()
         .parse()
@@ -258,7 +251,11 @@ fn json_f32(text: &str, key: &str) -> Option<f32> {
 // WAV writer (PCM 16-bit mono) — zero dipendenze
 // =============================================================================
 
-pub fn write_wav_mono(path: impl AsRef<Path>, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+pub fn write_wav_mono(
+    path: impl AsRef<Path>,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<(), String> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -272,18 +269,27 @@ pub fn write_wav_mono(path: impl AsRef<Path>, samples: &[f32], sample_rate: u32)
     let byte_rate = sample_rate * 2;
     let mut f = File::create(path).map_err(|e| e.to_string())?;
     f.write_all(b"RIFF").map_err(|e| e.to_string())?;
-    f.write_all(&(36 + data_len).to_le_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(&(36 + data_len).to_le_bytes())
+        .map_err(|e| e.to_string())?;
     f.write_all(b"WAVE").map_err(|e| e.to_string())?;
     f.write_all(b"fmt ").map_err(|e| e.to_string())?;
-    f.write_all(&16u32.to_le_bytes()).map_err(|e| e.to_string())?; // chunk size
-    f.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?; // PCM
-    f.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?; // mono
-    f.write_all(&sample_rate.to_le_bytes()).map_err(|e| e.to_string())?;
-    f.write_all(&byte_rate.to_le_bytes()).map_err(|e| e.to_string())?;
-    f.write_all(&2u16.to_le_bytes()).map_err(|e| e.to_string())?; // block align
-    f.write_all(&16u16.to_le_bytes()).map_err(|e| e.to_string())?; // bits
+    f.write_all(&16u32.to_le_bytes())
+        .map_err(|e| e.to_string())?; // chunk size
+    f.write_all(&1u16.to_le_bytes())
+        .map_err(|e| e.to_string())?; // PCM
+    f.write_all(&1u16.to_le_bytes())
+        .map_err(|e| e.to_string())?; // mono
+    f.write_all(&sample_rate.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    f.write_all(&byte_rate.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    f.write_all(&2u16.to_le_bytes())
+        .map_err(|e| e.to_string())?; // block align
+    f.write_all(&16u16.to_le_bytes())
+        .map_err(|e| e.to_string())?; // bits
     f.write_all(b"data").map_err(|e| e.to_string())?;
-    f.write_all(&data_len.to_le_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(&data_len.to_le_bytes())
+        .map_err(|e| e.to_string())?;
     f.write_all(&pcm).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -413,8 +419,8 @@ impl RebankBuilder {
             (t * 1200.0 * std::f32::consts::TAU).sin() * (1.0 - t / 0.04).max(0.0)
         })?;
         self.write_oneshot_sfx("sfx/wind.wav", 1.0, |t, i| {
-            let n = ((i.wrapping_mul(1664525).wrapping_add(1013904223) >> 16) as i16 as f32)
-                / 32768.0;
+            let n =
+                ((i.wrapping_mul(1664525).wrapping_add(1013904223) >> 16) as i16 as f32) / 32768.0;
             n * 0.15 * (0.5 + 0.5 * (t * 0.5).sin())
         })?;
 
@@ -471,7 +477,9 @@ impl RebankBuilder {
 }
 
 /// Carica un `.rebank` in layer PCM pronti per `CarSound`.
-pub fn load_rebank(path: impl AsRef<Path>) -> Result<(RebankManifest, Vec<EngineLayer>, Vec<EngineLayer>), String> {
+pub fn load_rebank(
+    path: impl AsRef<Path>,
+) -> Result<(RebankManifest, Vec<EngineLayer>, Vec<EngineLayer>), String> {
     let root = path.as_ref();
     let man_path = if root.is_file() {
         root.to_path_buf()

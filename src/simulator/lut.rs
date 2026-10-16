@@ -18,7 +18,7 @@ impl Lut1D {
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
-        let mut points = Vec::new();
+        let mut points: Vec<(f32, f32)> = Vec::new();
         for line in text.lines() {
             let line = line.split(';').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -95,7 +95,10 @@ pub fn synthesize_slip_curve(slip_peak: f32, falloff: f32, points: usize) -> Lut
             let over = (ax - slip_peak) / slip_peak.max(1e-4);
             (1.0 - falloff * over).clamp(0.25, 1.0)
         };
-        pts.push((x, y * x.signum().abs().max(0.0) * if x < 0.0 { -1.0 } else { 1.0 }));
+        pts.push((
+            x,
+            y * x.signum().abs().max(0.0) * if x < 0.0 { -1.0 } else { 1.0 },
+        ));
         // actually for force we want signed: sign(slip) * magnitude
         let mag = if ax <= slip_peak {
             (ax / slip_peak.max(1e-4) * std::f32::consts::FRAC_PI_2).sin()
