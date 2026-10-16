@@ -4558,6 +4558,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ramod",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

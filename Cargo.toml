@@ -14,3 +14,5 @@ readme = "README.md"
 # the other way round. See AGENTS.md, "Rule 1".
 bevy = "0.20"
 ramod = { git = "https://github.com/SimonTek27/RaMOD" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

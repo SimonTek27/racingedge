@@ -1,0 +1,20 @@
+{
+  "name": "Racing-Digital",
+  "size_px": 64.0,
+  "baseline_px": 72.0,
+  "glyphs": {
+    "0": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "1": {"width": 14, "x_offset": 0, "y_offset": 0},
+    "2": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "3": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "4": {"width": 20, "x_offset": 0, "y_offset": 0},
+    "5": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "6": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "7": {"width": 16, "x_offset": 0, "y_offset": 0},
+    "8": {"width": 24, "x_offset": 0, "y_offset": 0},
+    "9": {"width": 24, "x_offset": 0, "y_offset": 0},
+    ".": {"width": 8, "x_offset": 0, "y_offset": 0},
+    "-": {"width": 12, "x_offset": 0, "y_offset": 0},
+    "+": {"width": 12, "x_offset": 0, "y_offset": 0}
+  }
+}
