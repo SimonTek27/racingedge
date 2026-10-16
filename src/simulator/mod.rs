@@ -9,6 +9,7 @@ pub mod cockpit;
 pub mod drivetrain;
 pub mod electronics;
 pub mod engine;
+pub mod fonts;
 pub mod lut;
 pub mod physics;
 pub mod rebank;

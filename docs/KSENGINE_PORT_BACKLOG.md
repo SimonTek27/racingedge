@@ -55,13 +55,14 @@ Two migration gotchas worth remembering:
 | --- | --- | --- |
 | A2 track data | `src/editor/track/` (`data.rs`, `surfaces.rs`, `mod.rs`) | 15 unit tests |
 | A9 `sounds.ini` | `src/editor/audio/sounds_ini.rs` | 7 unit tests |
+| A14 AC fonts | `src/simulator/fonts.rs` — `.acf` bitmap-font config + text measurement | 10 unit tests + 5 doc tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
-and `cargo test --all-targets` all pass (49 unit tests + 1 doc test).
+and `cargo test --all-targets` all pass (59 unit tests + 6 doc tests).
 
 ---
 
@@ -96,6 +97,7 @@ and `cargo test --all-targets` all pass (49 unit tests + 1 doc test).
 | A11 | `formats/csp_config.rs` — CSP-style key/value config | `engine/Config/CspConfigParser.*` | S |
 | A12 | CLI: **FSPRO ↔ KSAudio ↔ FSB** conversion | `FileFormat/FSPROImporter/Exporter.*`, `KSAudio*` | M |
 | A13 | CLI: KN5 baker → runtime format + texture extraction | `FileFormat/Kn5Baker.*`, `tools/kn5baker` | M/L |
+| A14 ✅ | `simulator/fonts.rs` — Assetto Corsa `.acf` bitmap-font config (per-glyph `HPAD`/`VPAD`/`WIDTH`, `HEIGHT`, text measurement) | `sdk/kseditor/modules/fontEditor/fonteditor_acffile.*` | S |
 
 ## 3. Physics — extend `src/simulator/`
 
