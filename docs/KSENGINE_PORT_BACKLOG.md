@@ -69,13 +69,14 @@ Two migration gotchas worth remembering:
 | B3 damage | `src/simulator/damage.rs` — rF2-style `DamageSystem` (11 zones, component damage, impact distribution, CG shift, repair), `Rf2DamageModel` impulse bridge, `MechanicalDamage` continuous wear, `DamageTelemetry` sample | 17 unit tests |
 | D9 camera | `src/simulator/camera.rs` — `CameraController` cockpit/chase/free, head-bob, chase lag, free-fly, RH view + projection | 8 unit tests |
 | D5 pit/garage | `src/simulator/pit.rs` — `GarageExitController` phase machine (block reasons, pit limiter, exit cone), `PitLaneQueue` (leave/enter spacing + priority), `PitLaneCollision` (OBB SAT, walls, damage impulses, sync helpers), `PitLaneRepair` (job planning from `RepairData`, fuel/tyres, abort) and `PitStrategyState` mapping | 12 unit tests |
+| D8 input + FFB | `src/simulator/input.rs` (joystick/keyboard mapping, `key_name`/`key_from_name`, flat-ini persistence, `InputManager` with dead-zone/gamma curves, edge-triggered shifts, injection and a `ControllerBackend` trait for HW polling) + `src/simulator/ffb.rs` (`FfbBridge` aligning-moment→torque via `MagicFormulaTire`, `FfbOutput` soft-FFB with optional `FfbActuator`) | 14 + 6 unit tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (226 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (246 unit tests) and `cargo test --doc` (9 doc tests)
 all pass.
 
 ---
@@ -93,6 +94,8 @@ all pass.
 | `src/simulator/damage.rs` | `src/engine/physics/DamageSystem.*`, `Rf2DamageModel.h`, `MechanicalDamage.h`, `DamageTelemetry.h` |
 | `src/simulator/camera.rs` | `src/simulator/CameraController.*` |
 | `src/simulator/pit.rs` | `src/simulator/GarageExit.h`, `PitLaneQueue.h`, `PitLaneCollision.h`, `PitLaneRepair.h`, `PitStrategyBridge.h` |
+| `src/simulator/input.rs` | `src/simulator/InputManager.{h,cpp}`, `src/engine/devices/xinput/XInputDevice.*`, `DirectInputJoystick.*` |
+| `src/simulator/ffb.rs` | `src/simulator/FfbOutput.h`, `src/engine/devices/FFBBridge.{h,cpp}` |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
 | `src/simulator/car_sound.rs`, `rebank.rs`, `cockpit.rs` | `src/simulator/SimulatorAudio.*`, `VehicleAudioHook.h`, `AudioBankManager.*`, `DashboardOverlay.*` |
@@ -161,7 +164,7 @@ all pass.
 | D5 ✅ | Garage/pit state machine: garage exit → queue → collision → repair → strategy | `GarageExit.*`, `PitLaneQueue/Collision/Repair.h`, `PitStrategyBridge.h` | M/L |
 | D6 | Setup garage UI + setup persistence per car/track | `SetupGarage.*`, `ApplySetup.h` | M |
 | D7 | Multi-car manager + AI traffic (spline following) | `MultiCarManager.*`, `AIController.*`, `AIDriver.h` | L |
-| D8 | Input & FFB: gamepad, DirectInput wheels, force feedback output | `InputManager.*`, `devices/*`, `FfbOutput.h` | M/L |
+| D8 ✅ | Input & FFB: gamepad, DirectInput wheels, force feedback output (HW polling/actuators behind traits, attached by the app) | `InputManager.*`, `devices/*`, `FfbOutput.h` | M/L |
 | D9 ✅ | `camera.rs` — cockpit / cinematic / replay cameras | `CameraController.*` | S |
 | D10 | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
 | D11 | Menus: pause, settings, key rebind, device settings | `GameMenuOverlay.*`, `KeyRebindOverlay.h` | M |
@@ -225,7 +228,7 @@ all pass.
 E4 ✅, I1 ✅. **Done.**
 
 **Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅,
-B6 ✅, D9 ✅, D5 ✅, D6, D8, D10, C1, C2.
+B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6, D10, C1, C2.
 
 **Phase 3 — depth and platform.** A1, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
 E2, E3, E5, H1, H2, H3.

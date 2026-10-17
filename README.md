@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service) |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -217,7 +217,11 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   (phase machine, block reasons, pit limiter, exit cone), `PitLaneQueue`
   (leave/enter spacing with player priority), `PitLaneCollision` (OBB SAT
   contacts, corridor walls, damage impulses) and `PitLaneRepair` (job planning
-  from `RepairData`, tyres/fuel, abort).
+  from `RepairData`, tyres/fuel, abort). `InputManager` handles joystick/wheel
+  and rebindable keyboard mapping with dead-zone/gamma curves and edge-triggered
+  shifts (hardware polling is behind a `ControllerBackend` trait), and
+  `FfbOutput` produces soft force feedback from `FfbBridge`'s aligning-moment
+  torque, with an optional `FfbActuator` for real wheels.
 
 ## Roadmap
 

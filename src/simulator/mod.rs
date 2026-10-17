@@ -14,7 +14,9 @@ pub mod drivetrain;
 pub mod electronics;
 pub mod engine;
 pub mod feature_hub;
+pub mod ffb;
 pub mod fonts;
+pub mod input;
 pub mod lut;
 pub mod personal_best;
 pub mod physics;
@@ -48,6 +50,11 @@ pub use damage::{
 };
 pub use drivetrain::{DiffConfig, DiffState, DiffType, DifferentialModel, GearboxModel};
 pub use feature_hub::FeatureHub;
+pub use ffb::{FfbActuator, FfbBridge, FfbInputs, FfbOutput, FfbSample};
+pub use input::{
+    key_from_name, key_name, load_keyboard_mapping, save_keyboard_mapping, ControllerBackend,
+    ControllerState, InputManager, JoystickMapping, KeyboardMapping, AXIS_COUNT,
+};
 pub use personal_best::{PersonalBestRecord, PersonalBestStore};
 pub use physics::{integrate_transform, step_vehicle, VehicleConfig, VehicleState};
 pub use pit::{
