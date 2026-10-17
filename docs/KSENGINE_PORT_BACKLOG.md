@@ -73,13 +73,14 @@ Two migration gotchas worth remembering:
 | D6 setup | `src/simulator/setup.rs` — `SetupData`/`SetupParams`, tabbed `SetupGarage` (typed `GarageRow`s with ranges/stepping, key handling, fade) and per-car/track ini persistence (`setup_path`/`save_setup`/`load_setup`). The Bevy garage screen itself lands with the app UI | 14 unit tests |
 | C1 audio 3D | `src/simulator/audio3d.rs` — `doppler_factor`, `distance_gain`, `bearing_pan`, `OtherCarVoice` and `CarEventVolumes` (`[AUDIO_VOLUME]`/`[AUDIO_PITCH]` parsing + category mapping) | 13 unit tests |
 | C2 track audio | `src/simulator/track_audio.rs` — `TrackAudioManager` (event config parse from `audio_config.ini`, weather-driven triggers, per-camera gain, attenuation models) + `WeatherState` subset | 11 unit tests |
+| D10 HUD | `src/simulator/hud.rs` — `RaceTelemetryHud` (Off/Compact/Race/Engineer modes, per-mode line layout, speed/throttle/brake/rpm history, delta), `DashboardOverlay`, `TelemetryOverlay` plus a Bevy `HudPlugin` (mode cycle on F2, telemetry→sample sync, UI text nodes) | 15 unit tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (284 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (299 unit tests) and `cargo test --doc` (9 doc tests)
 all pass.
 
 ---
@@ -102,6 +103,7 @@ all pass.
 | `src/simulator/setup.rs` | `src/simulator/SetupGarage.{h,cpp}`, `src/simulator/ApplySetup.h` |
 | `src/simulator/audio3d.rs` | `src/simulator/Audio3D.h`, `src/simulator/CarEventVolumes.h` |
 | `src/simulator/track_audio.rs` | `src/simulator/TrackAudioManager.{h,cpp}` |
+| `src/simulator/hud.rs` | `src/simulator/DashboardOverlay.{h,cpp}`, `TelemetryOverlay.{h,cpp}`, `src/simulator/ui/RaceTelemetryHud.h` |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
 | `src/simulator/car_sound.rs`, `rebank.rs`, `cockpit.rs` | `src/simulator/SimulatorAudio.*`, `VehicleAudioHook.h`, `AudioBankManager.*`, `DashboardOverlay.*` |
@@ -172,7 +174,7 @@ all pass.
 | D7 | Multi-car manager + AI traffic (spline following) | `MultiCarManager.*`, `AIController.*`, `AIDriver.h` | L |
 | D8 ✅ | Input & FFB: gamepad, DirectInput wheels, force feedback output (HW polling/actuators behind traits, attached by the app) | `InputManager.*`, `devices/*`, `FfbOutput.h` | M/L |
 | D9 ✅ | `camera.rs` — cockpit / cinematic / replay cameras | `CameraController.*` | S |
-| D10 | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
+| D10 ✅ | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
 | D11 | Menus: pause, settings, key rebind, device settings | `GameMenuOverlay.*`, `KeyRebindOverlay.h` | M |
 | D12 | `content_library.rs` — scan installed content/mods | `ContentLibrary.h`, `tools/ksmmm` | M |
 | D13 ✅ | `user_stats.rs` — career stats: wins, poles, podiums, best lap (the `DriverProfile` helpers land with the D11 menus) | `UserStats.h` | S |
@@ -234,7 +236,7 @@ all pass.
 E4 ✅, I1 ✅. **Done.**
 
 **Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅,
-B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6 ✅, C1 ✅, C2 ✅, D10.
+B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6 ✅, C1 ✅, C2 ✅, D10 ✅.
 
 **Phase 3 — depth and platform.** A1, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
 E2, E3, E5, H1, H2, H3.

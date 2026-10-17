@@ -17,6 +17,7 @@ pub mod engine;
 pub mod feature_hub;
 pub mod ffb;
 pub mod fonts;
+pub mod hud;
 pub mod input;
 pub mod lut;
 pub mod personal_best;
@@ -55,6 +56,10 @@ pub use damage::{
 pub use drivetrain::{DiffConfig, DiffState, DiffType, DifferentialModel, GearboxModel};
 pub use feature_hub::FeatureHub;
 pub use ffb::{FfbActuator, FfbBridge, FfbInputs, FfbOutput, FfbSample};
+pub use hud::{
+    format_time_ms, DashboardData, DashboardOverlay, HudDamage, HudElement, HudPlugin, HudState,
+    RaceHudMode, RaceHudSample, RaceTelemetryHud, TelemetryData, TelemetryOverlay,
+};
 pub use input::{
     key_from_name, key_name, load_keyboard_mapping, save_keyboard_mapping, ControllerBackend,
     ControllerState, InputManager, JoystickMapping, KeyboardMapping, AXIS_COUNT,
