@@ -3,6 +3,7 @@
 pub mod ac_import;
 pub mod aero;
 pub mod aero_draft;
+pub mod audio3d;
 pub mod brake_thermal;
 pub mod brakes;
 pub mod camera;
@@ -35,6 +36,7 @@ pub mod user_stats;
 
 pub use ac_import::{load_car_auto, AcImporter};
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
+pub use audio3d::{bearing_pan, distance_gain, doppler_factor, CarEventVolumes, OtherCarVoice};
 pub use brake_thermal::{
     BrakeDiscWearState, BrakeFadeState, BrakeFadeType, BrakePadWearState, BrakeThermalConfig,
     BrakeThermalModel, BrakeThermalState, BrakeWearData, BrakeWearSystem,
