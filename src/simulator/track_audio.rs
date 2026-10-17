@@ -51,16 +51,7 @@ pub enum CameraMode {
     Replay,
 }
 
-/// Stato meteo visto dagli eventi audio (port of `physics::WeatherState` subset).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct WeatherState {
-    /// Copertura nuvolosa 0..1.
-    pub cloud_cover: f32,
-    /// Intensità pioggia 0..1.
-    pub rain_intensity: f32,
-    /// Velocità vento (m/s).
-    pub wind_speed: f32,
-}
+pub use crate::simulator::weather::WeatherState;
 
 /// Configurazione di un evento audio di pista.
 #[derive(Clone, Debug)]
@@ -356,6 +347,7 @@ trigger_value = 0.5\n\
             cloud_cover: 0.7,
             rain_intensity: 0.2,
             wind_speed: 45.0,
+            ..Default::default()
         };
         let d = TrackAudioManager::derive_trigger_value;
         assert!((d("SUN", &w) - 0.7).abs() < 1e-6);

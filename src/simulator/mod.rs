@@ -36,6 +36,7 @@ pub mod tire_wear;
 pub mod track_audio;
 pub mod track_limits;
 pub mod track_surface;
+pub mod weather;
 pub mod user_stats;
 
 pub use ac_import::{load_car_auto, AcImporter};
@@ -92,7 +93,7 @@ pub use tire_wear::{
     TireThermalState, TireWearConfig, TireWearDetailState, TireWearSystem,
 };
 pub use track_audio::{
-    AttenuationModel, AudioEventConfig, TrackAudioEvent, TrackAudioManager, WeatherState,
+    AttenuationModel, AudioEventConfig, TrackAudioEvent, TrackAudioManager,
 };
 pub use track_limits::{
     TrackLimitsConfig, TrackLimitsMonitor, TrackLimitsPenalty, TrackLimitsViolation,
@@ -101,4 +102,5 @@ pub use track_surface::{
     BankingModel, BankingState, ElevationModel, ElevationState, SurfaceGripModifier,
     SurfaceProperties, SurfaceSample, TrackSurface, TrackSurfaceModel,
 };
+pub use weather::WeatherState;
 pub use user_stats::DriverStats;
