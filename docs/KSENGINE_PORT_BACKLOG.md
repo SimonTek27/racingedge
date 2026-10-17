@@ -78,13 +78,14 @@ Two migration gotchas worth remembering:
 | A3 AI spline | `src/formats/ai_spline.rs` — `read_spline`/`write_spline` (`0x00414900` v1), text fallback, cumulative distance + closed-loop detection | 11 unit tests |
 | A7 replay | `src/formats/replay.rs` — `ReplayRecorder` (`RPLY` v1): 60 Hz recording, save/load, playback with speed/seek and linear frame interpolation | 13 unit tests |
 | B7 suspension kinematics | `src/simulator/suspension_kinematics.rs` — `SuspensionKinematics` (damper curve, camber/bump-steer LUTs, anti-roll bar, `stock()` presets) | 8 unit tests |
+| B8 track surface | `src/simulator/track_surface.rs` — `TrackSurface` grip grid (rubber/marbles/wetness/temperature per cell, radial deposit, material grips, off-track/kerb), `TrackSurfaceModel` (surface sections + grip modifier, wet reduction, curb effect, rolling resistance), `BankingModel`/`ElevationModel` | 15 unit tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (348 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (363 unit tests) and `cargo test --doc` (9 doc tests)
 all pass.
 
 ---
@@ -109,6 +110,7 @@ all pass.
 | `src/simulator/track_audio.rs` | `src/simulator/TrackAudioManager.{h,cpp}` |
 | `src/simulator/hud.rs` | `src/simulator/DashboardOverlay.{h,cpp}`, `TelemetryOverlay.{h,cpp}`, `src/simulator/ui/RaceTelemetryHud.h` |
 | `src/simulator/suspension_kinematics.rs` | `src/engine/physics/SuspensionKinematics.h` |
+| `src/simulator/track_surface.rs` | `src/engine/physics/TrackSurface.h`, `TrackPhysics.*` |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
 | `src/formats/kn5.rs` | `src/engine/FileFormat/Kn5Reader.*` |
@@ -149,7 +151,7 @@ all pass.
 | B5 ✅ | Gearbox: ratios, final drive, auto-shift, wheel torque | `GearboxModel.*` | S |
 | B6 ✅ | `aero_draft.rs` — slipstream / tow | `AeroDraft.h` | S |
 | B7 ✅ | Suspension kinematics (camber/toe vs travel, ARB, ride height) | `SuspensionKinematics.h` | M |
-| B8 | `track_surface.rs` — dynamic grip grid: rubbering, marbles, per-sector wetness | `TrackSurface.h`, `TrackPhysics.*` | M/L |
+| B8 ✅ | `track_surface.rs` — dynamic grip grid: rubbering, marbles, per-sector wetness | `TrackSurface.h`, `TrackPhysics.*` | M/L |
 | B9 | `weather.rs` — weather keyframes, grip vs wetness, track temperature | `WeatherPhysics.*`, `WeatherConfig.*`, `physics/weather/` | M |
 | B10 ✅ | `strategy.rs` — fuel planning + pit strategy (ksengine has no separate `FuelSystem`; fuel lives in `StrategySimulator`, so the port keeps it together) | `StrategySimulator.*` | S/M |
 | B11 ✅ | `timing.rs` — lap/sector timer + per-track/car personal bests (`PersonalBestStore` in `personal_best.rs`) | `phys_LapTimer.*`, `LapSectorTimer.h`, `PersonalBestStore.h` | S/M |

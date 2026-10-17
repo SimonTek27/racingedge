@@ -26,7 +26,7 @@ extracted and re-authored.
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
 | `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension (incl. kinematic LUTs), brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
-track ambience events from `audio_config.ini`, race HUD/telemetry overlay |
+track ambience events from `audio_config.ini`, race HUD/telemetry overlay, dynamic track-surface grip grid (rubbering/marbles/wetness) with banking/elevation models |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -249,7 +249,9 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   overlay: a `RaceTelemetryHud` model with Off/Compact/Race/Engineer modes,
   history buffers and damage/status lines, plus a Bevy plugin that renders it.
   `SuspensionKinematics` maps damper velocity, travel, camber and bump-steer
-  through sampled LUTs and derives the anti-roll bar force.
+  through sampled LUTs and derives the anti-roll bar force. `track_surface`
+  keeps a world-space grip grid where rubbering, marbles and wetness evolve per
+  cell, alongside a section-based surface model and banking/elevation maths.
 
 ## Roadmap
 
