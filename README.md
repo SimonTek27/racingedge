@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero (incl. slipstream/draft), suspension, brakes, drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -204,7 +204,10 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   (open/LSD/Torsen/locked/active with preload, power/coast ramps, locking
   transfer and thermal state) and `GearboxModel` (ratios, final drive,
   auto-shift, wheel torque) round out the drivetrain, and `compute_draft` models
-  the slipstream/tow behind a leading car.
+  the slipstream/tow behind a leading car. `TireWearSystem` tracks surface/core/
+  carcass temperature with wear, graining, blistering and per-compound grip, and
+  `TireFlatSpot` models locked-wheel flat spots; `BrakeThermalModel` and
+  `BrakeWearSystem` track disc/pad temperature, fade and pad/disc wear.
 
 ## Roadmap
 
@@ -215,8 +218,8 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
    cockpit HUD, car audio) — the plumbing is tracked in the
    [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
 4. Continue the ksengine port backlog: the remaining track/model formats,
-   the Phase 2 driving-experience items (track limits, garage/pit, cameras,
-   HUD, tyre/brake wear), multiplayer sync and the AC shared-memory bridge.
+   the Phase 2 driving-experience items (garage/pit, cameras, HUD),
+   multiplayer sync and the AC shared-memory bridge.
 
 ## License
 

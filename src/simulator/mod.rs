@@ -3,6 +3,7 @@
 pub mod ac_import;
 pub mod aero;
 pub mod aero_draft;
+pub mod brake_thermal;
 pub mod brakes;
 pub mod car_data;
 pub mod car_sound;
@@ -22,11 +23,16 @@ pub mod strategy;
 pub mod suspension;
 pub mod timing;
 pub mod tire;
+pub mod tire_wear;
 pub mod track_limits;
 pub mod user_stats;
 
 pub use ac_import::{load_car_auto, AcImporter};
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
+pub use brake_thermal::{
+    BrakeDiscWearState, BrakeFadeState, BrakeFadeType, BrakePadWearState, BrakeThermalConfig,
+    BrakeThermalModel, BrakeThermalState, BrakeWearData, BrakeWearSystem,
+};
 pub use car_data::CarPhysicsData;
 pub use car_sound::CarSoundPlugin;
 pub use cockpit::{CockpitPlugin, CockpitTelemetry};
@@ -39,6 +45,10 @@ pub use session::{defaults_for_mode, GameSessionMode, RaceFlag, RaceSession, Ses
 pub use session_flow::{SessionFlow, SessionFlowPhase};
 pub use strategy::{PitStopRecommendation, StrategyConfig, StrategySimulator, StrategyState};
 pub use timing::{LapSectorTimer, LapTimer, LapTimerEstimate};
+pub use tire_wear::{
+    TireCompound, TireCompoundData, TireFlatSpot, TireFlatSpotState, TireThermalConfig,
+    TireThermalState, TireWearConfig, TireWearDetailState, TireWearSystem,
+};
 pub use track_limits::{
     TrackLimitsConfig, TrackLimitsMonitor, TrackLimitsPenalty, TrackLimitsViolation,
 };
