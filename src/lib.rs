@@ -10,6 +10,7 @@
 //! * [`simulator`] — the runtime vehicle simulator (ksengine port).
 
 pub mod editor;
+pub mod formats;
 pub mod net;
 pub mod plugins;
 pub mod simulator;
