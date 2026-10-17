@@ -5,6 +5,7 @@ pub mod aero;
 pub mod aero_draft;
 pub mod brake_thermal;
 pub mod brakes;
+pub mod camera;
 pub mod car_data;
 pub mod car_sound;
 pub mod cockpit;
@@ -34,6 +35,7 @@ pub use brake_thermal::{
     BrakeDiscWearState, BrakeFadeState, BrakeFadeType, BrakePadWearState, BrakeThermalConfig,
     BrakeThermalModel, BrakeThermalState, BrakeWearData, BrakeWearSystem,
 };
+pub use camera::{CameraController, CameraMode};
 pub use car_data::CarPhysicsData;
 pub use car_sound::CarSoundPlugin;
 pub use cockpit::{CockpitPlugin, CockpitTelemetry};
