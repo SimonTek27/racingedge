@@ -15,7 +15,7 @@
 //! | `pb.setDirectory("user/pb")` | [`FeatureHub::start_services`] |
 //! | `onLapCompleted` | [`FeatureHub::on_lap_completed`] |
 //! | `discovery`, `control` | attaches with E2/E3 |
-//! | `trackLimits` | attaches with D3 |
+//! | `trackLimits` | [`FeatureHub::track_limits`] |
 //! | `weatherCtrl` | attaches with B9 |
 //! | `layouts`, `replay` | attaches with D4 / the track loader |
 //!
@@ -28,6 +28,7 @@ use bevy::prelude::Resource;
 use super::personal_best::PersonalBestStore;
 use super::session::{defaults_for_mode, GameSessionMode, SessionStartParams};
 use super::session_flow::SessionFlow;
+use super::track_limits::{TrackLimitsConfig, TrackLimitsMonitor};
 
 /// Default discovery port (`server/kssimserver.ini` `discovery-port`).
 pub const DEFAULT_DISCOVERY_PORT: u16 = 20779;
@@ -62,6 +63,8 @@ pub struct FeatureHub {
     pub flow: SessionFlow,
     /// Per-track/car personal bests.
     pub personal_best: PersonalBestStore,
+    /// Track-limits detection for every car.
+    pub track_limits: TrackLimitsMonitor,
     discovery_port: u16,
     control_port: u16,
     discovery_started: bool,
@@ -75,6 +78,7 @@ impl Default for FeatureHub {
             session_params: defaults_for_mode(GameSessionMode::Race),
             flow: SessionFlow::new(),
             personal_best: PersonalBestStore::new(),
+            track_limits: TrackLimitsMonitor::new(),
             discovery_port: DEFAULT_DISCOVERY_PORT,
             control_port: DEFAULT_CONTROL_PORT,
             discovery_started: false,
@@ -125,6 +129,19 @@ impl FeatureHub {
     /// there. Returns `false` when `dir` is unsafe or cannot be created.
     pub fn set_personal_best_directory(&mut self, dir: impl AsRef<std::path::Path>) -> bool {
         self.personal_best.set_directory(dir)
+    }
+
+    /// Enables or disables track-limits enforcement (port of
+    /// `setTrackLimitsEnabled`).
+    pub fn set_track_limits_enabled(&mut self, on: bool) {
+        let mut config = *self.track_limits.config();
+        config.enabled = on;
+        self.track_limits.set_config(config);
+    }
+
+    /// Replaces the track-limits configuration (port of `setTrackLimitsConfig`).
+    pub fn set_track_limits_config(&mut self, config: TrackLimitsConfig) {
+        self.track_limits.set_config(config);
     }
 
     /// Starts the bundled services.
@@ -247,6 +264,19 @@ mod tests {
         hub.stop_services();
         assert!(!hub.discovery_started());
         assert!(!hub.control_started());
+    }
+
+    #[test]
+    fn track_limits_are_configurable() {
+        let mut hub = FeatureHub::default();
+        assert!(hub.track_limits.config().enabled);
+        hub.set_track_limits_enabled(false);
+        assert!(!hub.track_limits.config().enabled);
+        hub.set_track_limits_config(TrackLimitsConfig {
+            max_lateral_m: 4.0,
+            ..Default::default()
+        });
+        assert_eq!(hub.track_limits.config().max_lateral_m, 4.0);
     }
 
     #[test]

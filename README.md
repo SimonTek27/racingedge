@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -198,7 +198,9 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   and start parameters, the qualifying → grid → countdown → race → finished
   `SessionFlow`, and the personal-best store, turning a completed lap into the
   same `PB …` / `LAP …` events the reference emits. `RaceSession` tracks flags,
-  penalties and phases.
+  penalties and phases, and `TrackLimitsMonitor` detects off-track excursions
+  (centerline lateral distance or an on-track hint) and escalates them to time,
+  drive-through, stop-go and disqualification penalties.
 
 ## Roadmap
 

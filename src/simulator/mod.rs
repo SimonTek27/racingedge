@@ -21,6 +21,7 @@ pub mod strategy;
 pub mod suspension;
 pub mod timing;
 pub mod tire;
+pub mod track_limits;
 pub mod user_stats;
 
 pub use ac_import::{load_car_auto, AcImporter};
@@ -35,4 +36,7 @@ pub use session::{defaults_for_mode, GameSessionMode, RaceFlag, RaceSession, Ses
 pub use session_flow::{SessionFlow, SessionFlowPhase};
 pub use strategy::{PitStopRecommendation, StrategyConfig, StrategySimulator, StrategyState};
 pub use timing::{LapSectorTimer, LapTimer, LapTimerEstimate};
+pub use track_limits::{
+    TrackLimitsConfig, TrackLimitsMonitor, TrackLimitsPenalty, TrackLimitsViolation,
+};
 pub use user_stats::DriverStats;
