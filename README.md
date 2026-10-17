@@ -21,7 +21,7 @@ extracted and re-authored.
 | `src/editor/audio/sounds_ini.rs` | `sounds.ini` event map (per-car / per-track audio routing) |
 | `src/editor/track/` | Track data: `data.json` metadata and the `surfaces.ini` grip grid |
 | `src/editor/ini.rs` | Ordered INI reader shared by the content editors |
-| `src/formats/` | Binary format readers shared by the game and the CLI: `.ksanim` node animations and `.kn5` AC mesh containers |
+| `src/formats/` | Binary format readers shared by the game and the CLI: `.ksanim` node animations, `.kn5` AC mesh containers and `.ai` spline lines |
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
@@ -193,6 +193,11 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   world matrices accumulated from Base ancestors and every read bounds-checked.
   `to_bevy_mesh` turns a parsed mesh into a Bevy `Mesh` (positions/normals/uv/
   indices). Texture payloads are skipped unless `keep_texture_data` is set.
+* **Read AI lines**: `formats::ai_spline` reads and writes Assetto Corsa
+  `fast_lane.ai` splines (magic `0x00414900`, version 1) with the same byte
+  layout as the reference editor, falling back to a comma-separated text file
+  when the magic is absent. It derives cumulative distance and the closed-loop
+  flag the same way the reference does.
 * **Stream telemetry**: `TelemetryPlugin` broadcasts `KSIM` v2 frames (116 bytes,
   speed/rpm/gear/inputs/position/lap/fuel/damage/tyres) on UDP `:20777` and TCP
   `:20778`, with the same wire format and ports as the reference engine, so
