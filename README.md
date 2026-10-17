@@ -21,7 +21,7 @@ extracted and re-authored.
 | `src/editor/audio/sounds_ini.rs` | `sounds.ini` event map (per-car / per-track audio routing) |
 | `src/editor/track/` | Track data: `data.json` metadata and the `surfaces.ini` grip grid |
 | `src/editor/ini.rs` | Ordered INI reader shared by the content editors |
-| `src/formats/` | Binary format readers shared by the game and the CLI: `.ksanim` node animations, `.kn5` AC mesh containers and `.ai` spline lines |
+| `src/formats/` | Binary format readers shared by the game and the CLI: `.ksanim` node animations, `.kn5` AC mesh containers, `.ai` spline lines and replay files |
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
@@ -198,6 +198,9 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   layout as the reference editor, falling back to a comma-separated text file
   when the magic is absent. It derives cumulative distance and the closed-loop
   flag the same way the reference does.
+* **Record and play replays**: `formats::replay` implements the `ReplayRecorder`
+  (`RPLY` v1): 60 Hz frame recording, save/load, and playback with speed control,
+  seeking and linear interpolation between frames (gear snaps to the nearer one).
 * **Stream telemetry**: `TelemetryPlugin` broadcasts `KSIM` v2 frames (116 bytes,
   speed/rpm/gear/inputs/position/lap/fuel/damage/tyres) on UDP `:20777` and TCP
   `:20778`, with the same wire format and ports as the reference engine, so

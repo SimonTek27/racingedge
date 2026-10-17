@@ -7,3 +7,4 @@
 pub mod ai_spline;
 pub mod kn5;
 pub mod ksanim;
+pub mod replay;
