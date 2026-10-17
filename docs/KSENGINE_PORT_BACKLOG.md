@@ -74,13 +74,14 @@ Two migration gotchas worth remembering:
 | C1 audio 3D | `src/simulator/audio3d.rs` — `doppler_factor`, `distance_gain`, `bearing_pan`, `OtherCarVoice` and `CarEventVolumes` (`[AUDIO_VOLUME]`/`[AUDIO_PITCH]` parsing + category mapping) | 13 unit tests |
 | C2 track audio | `src/simulator/track_audio.rs` — `TrackAudioManager` (event config parse from `audio_config.ini`, weather-driven triggers, per-camera gain, attenuation models) + `WeatherState` subset | 11 unit tests |
 | D10 HUD | `src/simulator/hud.rs` — `RaceTelemetryHud` (Off/Compact/Race/Engineer modes, per-mode line layout, speed/throttle/brake/rpm history, delta), `DashboardOverlay`, `TelemetryOverlay` plus a Bevy `HudPlugin` (mode cycle on F2, telemetry→sample sync, UI text nodes) | 15 unit tests |
+| A1 KN5 | `src/formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6): textures, materials, node hierarchy (Base/Mesh/SkinnedMesh), world matrices, bounds-checked cursor, `to_bevy_mesh` conversion | 17 unit tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (299 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (316 unit tests) and `cargo test --doc` (9 doc tests)
 all pass.
 
 ---
@@ -106,6 +107,7 @@ all pass.
 | `src/simulator/hud.rs` | `src/simulator/DashboardOverlay.{h,cpp}`, `TelemetryOverlay.{h,cpp}`, `src/simulator/ui/RaceTelemetryHud.h` |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
+| `src/formats/kn5.rs` | `src/engine/FileFormat/Kn5Reader.*` |
 | `src/simulator/car_sound.rs`, `rebank.rs`, `cockpit.rs` | `src/simulator/SimulatorAudio.*`, `VehicleAudioHook.h`, `AudioBankManager.*`, `DashboardOverlay.*` |
 | `src/editor/audio/`, `src/bin/rea_bridge.rs` | `FileFormat/BankParser*`, `BankWriter*`, `FSPROImporter/Exporter.*`, `KSAudioImporter/Exporter.*` |
 
@@ -115,7 +117,7 @@ all pass.
 
 | # | Module to write | ksengine reference | Effort |
 | --- | --- | --- | --- |
-| A1 | `formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6) → Bevy meshes/materials | `FileFormat/Kn5Reader.*` | L |
+| A1 ✅ | `formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6) → Bevy meshes/materials | `FileFormat/Kn5Reader.*` | L |
 | A2 ✅ | `editor/track/{data.rs,surfaces.rs}` — `<track>/data/data.json` + `surfaces.ini` grip grid | `TrackDataJsonLoader.h`, `AcSurfacesLoader.*` | S |
 | A3 | `formats/ai_spline.rs` — AI spline reader/writer (magic `0x00414900` v1) | `AiFileReader/Writer.*`, `FileFormat/AiSpline.*` | S/M |
 | A4 ✅ | `formats/ksanim.rs` — `.ksanim` node-animation container (binary, v0/v1/v2) | `FileFormat/KsAnim.*` | S |
@@ -238,7 +240,7 @@ E4 ✅, I1 ✅. **Done.**
 **Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅,
 B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6 ✅, C1 ✅, C2 ✅, D10 ✅.
 
-**Phase 3 — depth and platform.** A1, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
+**Phase 3 — depth and platform.** A1 ✅, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
 E2, E3, E5, H1, H2, H3.
 
 **Phase 4 — editor and extended modding.** A12, A13, C3–C7, F1–F5, G1–G6,

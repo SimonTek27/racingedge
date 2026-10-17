@@ -4,4 +4,5 @@
 //! content. The formats are shared by the game binary and the CLI
 //! (AGENTS.md, Rule 3).
 
+pub mod kn5;
 pub mod ksanim;
