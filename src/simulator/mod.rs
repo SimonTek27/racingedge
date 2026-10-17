@@ -24,6 +24,7 @@ pub mod pit;
 pub mod rebank;
 pub mod session;
 pub mod session_flow;
+pub mod setup;
 pub mod strategy;
 pub mod suspension;
 pub mod timing;
@@ -69,6 +70,10 @@ pub use pit::{
 pub use rebank::{ensure_default_rebank, RebankBuilder};
 pub use session::{defaults_for_mode, GameSessionMode, RaceFlag, RaceSession, SessionStartParams};
 pub use session_flow::{SessionFlow, SessionFlowPhase};
+pub use setup::{
+    load_setup, save_setup, setup_path, GarageRow, GarageTab, SetupData, SetupField, SetupGarage,
+    SetupParams,
+};
 pub use strategy::{PitStopRecommendation, StrategyConfig, StrategySimulator, StrategyState};
 pub use timing::{LapSectorTimer, LapTimer, LapTimerEstimate};
 pub use tire_wear::{
