@@ -8,6 +8,7 @@ pub mod brakes;
 pub mod car_data;
 pub mod car_sound;
 pub mod cockpit;
+pub mod damage;
 pub mod drivetrain;
 pub mod electronics;
 pub mod engine;
@@ -36,6 +37,12 @@ pub use brake_thermal::{
 pub use car_data::CarPhysicsData;
 pub use car_sound::CarSoundPlugin;
 pub use cockpit::{CockpitPlugin, CockpitTelemetry};
+pub use damage::{
+    apply_mechanical_impact, apply_mechanical_wear, apply_pit_contact_damage, apply_rf2_impulse,
+    impulse_from_impact, sample_damage, sample_mechanical_effects, CollisionEvent, DamageConfig,
+    DamageSystem, DamageTelemSample, DamageType, DamageZone, MechEffectMultipliers, MechTelemetry,
+    MechWearConfig, RepairData, Rf2DamageParams,
+};
 pub use drivetrain::{DiffConfig, DiffState, DiffType, DifferentialModel, GearboxModel};
 pub use feature_hub::FeatureHub;
 pub use personal_best::{PersonalBestRecord, PersonalBestStore};

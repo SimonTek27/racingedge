@@ -66,13 +66,14 @@ Two migration gotchas worth remembering:
 | B6 aero draft | `src/simulator/aero_draft.rs` — `DraftState` + `compute_draft` slipstream/tow | 6 unit tests |
 | B1 tyre wear | `src/simulator/tire_wear.rs` — `TireWearSystem` (thermal surface/core/carcass, wear + graining + blistering, compound presets) and `TireFlatSpot` | 11 unit tests |
 | B2 brake thermal | `src/simulator/brake_thermal.rs` — `BrakeThermalModel` (per-corner disc/pad temp + fade) and `BrakeWearSystem` (fade types, pad/disc wear, warpage; thermal types renamed `BrakeWearThermal*` per upstream's own note) | 10 unit tests |
+| B3 damage | `src/simulator/damage.rs` — rF2-style `DamageSystem` (11 zones, component damage, impact distribution, CG shift, repair), `Rf2DamageModel` impulse bridge, `MechanicalDamage` continuous wear, `DamageTelemetry` sample | 17 unit tests |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (189 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (206 unit tests) and `cargo test --doc` (9 doc tests)
 all pass.
 
 ---
@@ -87,6 +88,7 @@ all pass.
 | `src/simulator/aero_draft.rs` | `src/engine/physics/AeroDraft.h` |
 | `src/simulator/tire_wear.rs` | `src/engine/physics/TireWearSystem.*`, `TireFlatSpot.h` |
 | `src/simulator/brake_thermal.rs` | `src/engine/physics/BrakeThermalModel.*`, `BrakeWearSystem.*` |
+| `src/simulator/damage.rs` | `src/engine/physics/DamageSystem.*`, `Rf2DamageModel.h`, `MechanicalDamage.h`, `DamageTelemetry.h` |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
 | `src/simulator/car_sound.rs`, `rebank.rs`, `cockpit.rs` | `src/simulator/SimulatorAudio.*`, `VehicleAudioHook.h`, `AudioBankManager.*`, `DashboardOverlay.*` |
@@ -119,7 +121,7 @@ all pass.
 | --- | --- | --- | --- |
 | B1 ✅ | `tire_wear.rs` — tyre wear + flat spots | `TireWearSystem.*`, `TireFlatSpot.h` | M |
 | B2 ✅ | `brake_thermal.rs` — brake temperature + pad/disc wear | `BrakeThermalModel.*`, `BrakeWearSystem.*` | M |
-| B3 | `damage.rs` — rF2 damage zones, impact impulses, damage telemetry | `DamageSystem.*`, `Rf2DamageModel.h`, `MechanicalDamage.h`, `DamageTelemetry.h` | M/L |
+| B3 ✅ | `damage.rs` — rF2 damage zones, impact impulses, damage telemetry | `DamageSystem.*`, `Rf2DamageModel.h`, `MechanicalDamage.h`, `DamageTelemetry.h` | M/L |
 | B4 ✅ | Full differential: preload, power/coast ramps, LSD | `DifferentialModel.*` | S/M |
 | B5 ✅ | Gearbox: ratios, final drive, auto-shift, wheel torque | `GearboxModel.*` | S |
 | B6 ✅ | `aero_draft.rs` — slipstream / tow | `AeroDraft.h` | S |
@@ -218,8 +220,8 @@ all pass.
 **Phase 1 — close the AC vertical.** A2 ✅, A9 ✅, B10 ✅, B11 ✅, D1 ✅, D13 ✅,
 E4 ✅, I1 ✅. **Done.**
 
-**Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B4 ✅, B5 ✅, B6 ✅,
-D5, D6, D8, D9, D10, C1, C2.
+**Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅,
+B6 ✅, D5, D6, D8, D9, D10, C1, C2.
 
 **Phase 3 — depth and platform.** A1, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
 E2, E3, E5, H1, H2, H3.
