@@ -29,6 +29,7 @@ pub mod session_flow;
 pub mod setup;
 pub mod strategy;
 pub mod suspension;
+pub mod suspension_kinematics;
 pub mod timing;
 pub mod tire;
 pub mod tire_wear;
@@ -83,6 +84,7 @@ pub use setup::{
     SetupParams,
 };
 pub use strategy::{PitStopRecommendation, StrategyConfig, StrategySimulator, StrategyState};
+pub use suspension_kinematics::{DamperCurvePoint, SuspensionKinematics};
 pub use timing::{LapSectorTimer, LapTimer, LapTimerEstimate};
 pub use tire_wear::{
     TireCompound, TireCompoundData, TireFlatSpot, TireFlatSpotState, TireThermalConfig,

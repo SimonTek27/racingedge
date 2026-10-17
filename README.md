@@ -25,7 +25,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension (incl. kinematic LUTs), brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
 track ambience events from `audio_config.ini`, race HUD/telemetry overlay |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
@@ -248,6 +248,8 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   weather and scaling gain per camera. `hud` ports the race HUD/telemetry
   overlay: a `RaceTelemetryHud` model with Off/Compact/Race/Engineer modes,
   history buffers and damage/status lines, plus a Bevy plugin that renders it.
+  `SuspensionKinematics` maps damper velocity, travel, camber and bump-steer
+  through sampled LUTs and derives the anti-roll bar force.
 
 ## Roadmap
 
