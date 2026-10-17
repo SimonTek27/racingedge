@@ -31,6 +31,7 @@ pub mod suspension;
 pub mod timing;
 pub mod tire;
 pub mod tire_wear;
+pub mod track_audio;
 pub mod track_limits;
 pub mod user_stats;
 
@@ -81,6 +82,9 @@ pub use timing::{LapSectorTimer, LapTimer, LapTimerEstimate};
 pub use tire_wear::{
     TireCompound, TireCompoundData, TireFlatSpot, TireFlatSpotState, TireThermalConfig,
     TireThermalState, TireWearConfig, TireWearDetailState, TireWearSystem,
+};
+pub use track_audio::{
+    AttenuationModel, AudioEventConfig, TrackAudioEvent, TrackAudioManager, WeatherState,
 };
 pub use track_limits::{
     TrackLimitsConfig, TrackLimitsMonitor, TrackLimitsPenalty, TrackLimitsViolation,
