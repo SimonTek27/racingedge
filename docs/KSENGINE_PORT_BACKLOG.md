@@ -59,13 +59,15 @@ Two migration gotchas worth remembering:
 | B11 timing | `src/simulator/timing.rs` (`LapTimer` = `phys_LapTimer`, `LapSectorTimer`), `src/simulator/personal_best.rs` (`PersonalBestStore`, file-backed `.pb`) | 16 + 9 unit tests + 2 doc tests |
 | B10 strategy | `src/simulator/strategy.rs` — `StrategySimulator`: fuel planning + pit-stop recommendation | 7 unit tests |
 | D13 user stats | `src/simulator/user_stats.rs` — `DriverStats` persisted to `stats.json` (camel-case keys, partial-merge load) | 6 unit tests + 1 doc test |
+| D2 sessions | `src/simulator/session.rs` (`GameSessionMode`, `SessionStartParams`, `RaceFlag`, `RaceSession`), `src/simulator/session_flow.rs` (`SessionFlow`) | 8 + 10 unit tests + 1 doc test |
+| D1 FeatureHub | `src/simulator/feature_hub.rs` — Bevy `Resource` composing mode/params, `SessionFlow` and `PersonalBestStore`; lap→PB event strings | 6 unit tests + 1 doc test |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (115 unit tests) and `cargo test --doc` (6 doc tests)
+`cargo test --all-targets` (139 unit tests) and `cargo test --doc` (8 doc tests)
 all pass.
 
 ---
@@ -138,8 +140,8 @@ all pass.
 
 | # | Module to write | ksengine reference | Effort |
 | --- | --- | --- | --- |
-| D1 | `FeatureHub` as the single resource (session, weather, limits, PB, API) | `Simulator/FeatureHub.h` | M |
-| D2 | Sessions and flags: practice/qualifying/race, flags, countdown, standing start | `RaceSession*.*`, `RaceFlag.h`, `SessionFlow.h` | M/L |
+| D1 ✅ | `feature_hub.rs` — Bevy resource (session, flow, PB). Discovery/control sockets attach with E2/E3, track limits with D3, weather with B9, replay with D4 | `Simulator/FeatureHub.h` | M |
+| D2 ✅ | `session.rs` + `session_flow.rs` — practice/qualifying/race, flags, penalties, countdown, grid publish, standings | `RaceSession*.*`, `RaceFlag.h`, `SessionFlow.h` | M/L |
 | D3 | `track_limits.rs` — track cut, penalties, pit speeding | `TrackLimitsMonitor.h` | M |
 | D4 | Replay recorder + playback | `ReplayRecorder.*` | M |
 | D5 | Garage/pit state machine: garage exit → queue → collision → repair → strategy | `GarageExit.*`, `PitLaneQueue/Collision/Repair.h`, `PitStrategyBridge.h` | M/L |
@@ -205,11 +207,11 @@ all pass.
 
 ## Suggested sequence
 
-**Phase 1 — close the AC vertical.** A2 ✅, A9 ✅, B10 ✅, B11 ✅, D1, D13 ✅,
-E4 ✅, I1 ✅.
+**Phase 1 — close the AC vertical.** A2 ✅, A9 ✅, B10 ✅, B11 ✅, D1 ✅, D13 ✅,
+E4 ✅, I1 ✅. **Done.**
 
-**Phase 2 — driving experience.** D2, D3, D5, D6, D8, D9, D10, B1, B2, B4, B5,
-B6, C1, C2.
+**Phase 2 — driving experience.** D2 ✅, D3, D5, D6, D8, D9, D10, B1, B2, B4,
+B5, B6, C1, C2.
 
 **Phase 3 — depth and platform.** A1, A3, A7, B3, B7, B8, B9, B14, D4, D7, E1,
 E2, E3, E5, H1, H2, H3.

@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -194,6 +194,11 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   (AC-style, spline-derived sectors) in `simulator/timing.rs`, a file-backed
   per-track/car `PersonalBestStore` (`.pb`), `StrategySimulator` fuel/pit-stop
   planning, and `DriverStats` persisted to `stats.json`.
+* **Run a session**: `FeatureHub` (a Bevy `Resource`) bundles the session mode
+  and start parameters, the qualifying → grid → countdown → race → finished
+  `SessionFlow`, and the personal-best store, turning a completed lap into the
+  same `PB …` / `LAP …` events the reference emits. `RaceSession` tracks flags,
+  penalties and phases.
 
 ## Roadmap
 
@@ -203,8 +208,9 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
 3. Assemble the `src/simulator/` runtime into the game binary (physics plugin,
    cockpit HUD, car audio) — the plumbing is tracked in the
    [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
-4. Continue the ksengine port backlog: track/model formats, fuel and timing,
-   session/flag state, multiplayer sync and the AC shared-memory bridge.
+4. Continue the ksengine port backlog: the remaining track/model formats,
+   the Phase 2 driving-experience items (track limits, garage/pit, cameras,
+   HUD, tyre/brake wear), multiplayer sync and the AC shared-memory bridge.
 
 ## License
 
