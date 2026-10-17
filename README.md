@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension, brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service) |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -213,7 +213,11 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   shifts the CG and exposes repair cost/time (with `Rf2DamageModel` impulse and
   `MechanicalDamage` continuous-wear bridges and a telemetry sample). The
   `CameraController` provides cockpit (with head-bob), smoothed chase and free-fly
-  modes.
+  modes. The pit-lane stack models the full box flow: `GarageExitController`
+  (phase machine, block reasons, pit limiter, exit cone), `PitLaneQueue`
+  (leave/enter spacing with player priority), `PitLaneCollision` (OBB SAT
+  contacts, corridor walls, damage impulses) and `PitLaneRepair` (job planning
+  from `RepairData`, tyres/fuel, abort).
 
 ## Roadmap
 

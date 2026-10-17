@@ -18,6 +18,7 @@ pub mod fonts;
 pub mod lut;
 pub mod personal_best;
 pub mod physics;
+pub mod pit;
 pub mod rebank;
 pub mod session;
 pub mod session_flow;
@@ -49,6 +50,15 @@ pub use drivetrain::{DiffConfig, DiffState, DiffType, DifferentialModel, Gearbox
 pub use feature_hub::FeatureHub;
 pub use personal_best::{PersonalBestRecord, PersonalBestStore};
 pub use physics::{integrate_transform, step_vehicle, VehicleConfig, VehicleState};
+pub use pit::{
+    apply_pit_collision_results, apply_strategy_to_repair_input,
+    integrate_pit_queue_with_garage_exit, is_exit_path_blocked, sync_pit_collision_from_queue,
+    GarageBlockReason, GarageBoxPose, GarageExitConfig, GarageExitController, GarageExitInput,
+    GarageExitOutput, GarageExitPhase, PitAxis, PitCarBody, PitCollisionContact, PitJob,
+    PitJobState, PitJobType, PitLaneCollision, PitLaneCollisionConfig, PitLaneQueue,
+    PitLaneQueueConfig, PitLaneRepair, PitQueueEntry, PitQueueRole, PitQueueStatus,
+    PitRepairConfig, PitRepairInput, PitRepairOutput, PitStrategyState,
+};
 pub use rebank::{ensure_default_rebank, RebankBuilder};
 pub use session::{defaults_for_mode, GameSessionMode, RaceFlag, RaceSession, SessionStartParams};
 pub use session_flow::{SessionFlow, SessionFlowPhase};
