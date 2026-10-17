@@ -24,7 +24,7 @@ extracted and re-authored.
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
-| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio |
+| `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula), engine, aero, suspension, brakes, drivetrain, electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
@@ -190,6 +190,10 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   `:20778`, with the same wire format and ports as the reference engine, so
   existing dashboards and telemetry tools can consume them. Off by default:
   opt in with `TelemetryConfig { enabled: true, ..default() }`.
+* **Time laps and plan races**: `LapTimer` (event-driven) and `LapSectorTimer`
+  (AC-style, spline-derived sectors) in `simulator/timing.rs`, a file-backed
+  per-track/car `PersonalBestStore` (`.pb`), `StrategySimulator` fuel/pit-stop
+  planning, and `DriverStats` persisted to `stats.json`.
 
 ## Roadmap
 

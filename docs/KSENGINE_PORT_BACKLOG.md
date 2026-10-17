@@ -56,13 +56,17 @@ Two migration gotchas worth remembering:
 | A2 track data | `src/editor/track/` (`data.rs`, `surfaces.rs`, `mod.rs`) | 15 unit tests |
 | A9 `sounds.ini` | `src/editor/audio/sounds_ini.rs` | 7 unit tests |
 | A14 JSON fonts | `src/simulator/fonts.rs` — JSON bitmap-font definitions for cockpit digital instruments (per-glyph `width`, `x_offset`, `y_offset`, text measurement) | 5 unit tests + 2 doc tests |
+| B11 timing | `src/simulator/timing.rs` (`LapTimer` = `phys_LapTimer`, `LapSectorTimer`), `src/simulator/personal_best.rs` (`PersonalBestStore`, file-backed `.pb`) | 16 + 9 unit tests + 2 doc tests |
+| B10 strategy | `src/simulator/strategy.rs` — `StrategySimulator`: fuel planning + pit-stop recommendation | 7 unit tests |
+| D13 user stats | `src/simulator/user_stats.rs` — `DriverStats` persisted to `stats.json` (camel-case keys, partial-merge load) | 6 unit tests + 1 doc test |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
-Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
-and `cargo test --all-targets` all pass (54 unit tests + 6 doc tests).
+Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test --all-targets` (115 unit tests) and `cargo test --doc` (6 doc tests)
+all pass.
 
 ---
 
@@ -87,7 +91,7 @@ and `cargo test --all-targets` all pass (54 unit tests + 6 doc tests).
 | A1 | `formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6) → Bevy meshes/materials | `FileFormat/Kn5Reader.*` | L |
 | A2 ✅ | `editor/track/{data.rs,surfaces.rs}` — `<track>/data/data.json` + `surfaces.ini` grip grid | `TrackDataJsonLoader.h`, `AcSurfacesLoader.*` | S |
 | A3 | `formats/ai_spline.rs` — AI spline reader/writer (magic `0x00414900` v1) | `AiFileReader/Writer.*`, `FileFormat/AiSpline.*` | S/M |
-| A4 | `formats/ksanim.rs` — `.ksanim` animation | `FileFormat/KsAnim.*` | S |
+| A4 ✅ | `formats/ksanim.rs` — `.ksanim` node-animation container (binary, v0/v1/v2) | `FileFormat/KsAnim.*` | S |
 | A5 | `formats/acd.rs` — `data.acd` (ROT decipher + key) | `FileFormat/AcdReader.*` | M |
 | A6 | `formats/setup.rs` — setup `.ini` + `setup.json` per car | `Simulator/SetupFile.h`, `SetupJson.h` | S/M |
 | A7 | `formats/replay.rs` — replay record/playback | `Simulator/ReplayRecorder.*` | M |
@@ -112,8 +116,8 @@ and `cargo test --all-targets` all pass (54 unit tests + 6 doc tests).
 | B7 | Suspension kinematics (camber/toe vs travel, ARB, ride height) | `SuspensionKinematics.h` | M |
 | B8 | `track_surface.rs` — dynamic grip grid: rubbering, marbles, per-sector wetness | `TrackSurface.h`, `TrackPhysics.*` | M/L |
 | B9 | `weather.rs` — weather keyframes, grip vs wetness, track temperature | `WeatherPhysics.*`, `WeatherConfig.*`, `physics/weather/` | M |
-| B10 | `fuel.rs` + `strategy.rs` — fuel burn and pit strategy | `StrategySimulator.*` | S/M |
-| B11 | `timing.rs` — lap/sector timer + per-track/car personal bests | `phys_LapTimer.*`, `LapSectorTimer.h`, `PersonalBestStore.h` | S/M |
+| B10 ✅ | `strategy.rs` — fuel planning + pit strategy (ksengine has no separate `FuelSystem`; fuel lives in `StrategySimulator`, so the port keeps it together) | `StrategySimulator.*` | S/M |
+| B11 ✅ | `timing.rs` — lap/sector timer + per-track/car personal bests (`PersonalBestStore` in `personal_best.rs`) | `phys_LapTimer.*`, `LapSectorTimer.h`, `PersonalBestStore.h` | S/M |
 | B12 | `physics_validate.rs` — validator + golden reference tests | `PhysicsValidator.*`, `PhysicsGolden.h` | S/M |
 | B13 | `physics_profile.rs` — physics/frame profiler | `PhysicsProfiler.*`, `GpuProfiler.*` | S |
 | B14 | `loop.rs` — deterministic fixed timestep (1 kHz, as kssim) | `SimulationLoop::m_physicsDt` | M |
@@ -146,7 +150,7 @@ and `cargo test --all-targets` all pass (54 unit tests + 6 doc tests).
 | D10 | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
 | D11 | Menus: pause, settings, key rebind, device settings | `GameMenuOverlay.*`, `KeyRebindOverlay.h` | M |
 | D12 | `content_library.rs` — scan installed content/mods | `ContentLibrary.h`, `tools/ksmmm` | M |
-| D13 | `user_stats.rs` — career stats: wins, poles, podiums, best lap | `UserStats.h` | S |
+| D13 ✅ | `user_stats.rs` — career stats: wins, poles, podiums, best lap (the `DriverProfile` helpers land with the D11 menus) | `UserStats.h` | S |
 
 ## 6. Networking and telemetry
 
@@ -201,7 +205,8 @@ and `cargo test --all-targets` all pass (54 unit tests + 6 doc tests).
 
 ## Suggested sequence
 
-**Phase 1 — close the AC vertical.** A2, A9, B10, B11, D1, D13, E4, I1.
+**Phase 1 — close the AC vertical.** A2 ✅, A9 ✅, B10 ✅, B11 ✅, D1, D13 ✅,
+E4 ✅, I1 ✅.
 
 **Phase 2 — driving experience.** D2, D3, D5, D6, D8, D9, D10, B1, B2, B4, B5,
 B6, C1, C2.
@@ -218,8 +223,8 @@ E6–E8.
    and telemetry tools straight away.
 2. **A2 + A9** (`data.json`, `surfaces.ini`, `sounds.ini`) — completes the AC
    track/car content pipeline started by `ac_import.rs`.
-3. **B10 + B11** (fuel and timing/PB) — a complete race loop with lap times and
-   pit stops.
+3. **B10 + B11 ✅** (fuel and timing/PB) — a complete race loop with lap times
+   and pit stops.
 4. **D1 + D2** (FeatureHub + session/flags) — a real "game" skeleton around the
    physics.
 5. **I1 CI** — protects everything that follows.
