@@ -1,10 +1,15 @@
 //! Rete e telemetria.
 //!
-//! Port dei canali di ksengine (`UdpTelemetryBridge`, `TcpTelemetryBridge`,
-//! `CarStateSync`, `ServerDiscovery`, `ExternalControlApi`, …). Per ora è
-//! implementata la **telemetria in uscita**; gli altri canali elencati nel
-//! [backlog ksengine](../../docs/KSENGINE_PORT_BACKLOG.md) trovano posto qui.
+//! Port of ksengine channels (`UdpTelemetryBridge`, `TcpTelemetryBridge`,
+//! `CarStateSync`, `ServerDiscovery`, `ExternalControlApi`, …). For now is
+//! implemented **outgoing telemetry**; the other channels listed in the
+//! [ksengine port backlog](../../docs/KSENGINE_PORT_BACKLOG.md) are placed here.
 //!
-//! * [`telemetry`] — telemetria in uscita su UDP `:20777` e TCP `:20778`.
+//! * [`telemetry`] — outgoing telemetry over UDP `:20777` and TCP `:20778`.
 
+pub mod ac_shared_memory;
+pub mod car_state_sync;
+pub mod control_api;
+pub mod discovery;
+pub mod matchmaking;
 pub mod telemetry;

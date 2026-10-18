@@ -390,8 +390,8 @@ mod tests {
         let fx = t.peak_longitudinal(4000.0);
         // `peak_*` campiona a 8° / 0.12 come `calculatePeak*Grip` di ksengine,
         // non il massimo matematico della curva. Su questa slick `By ≈ 0.2`
-        // (ksengine tiene la curva laterale ancora in salita), quindi il
-        // laterale resta molto sotto `mu * Fz`: qui conta solo il segno.
+        // (ksengine keeps the lateral curve further up the slope), therefore the
+        // lateral remains much below `mu * Fz`: here only the sign matters.
         assert!(fy > 0.0, "fy={fy}");
         assert!(fx > 0.0, "fx={fx}");
     }

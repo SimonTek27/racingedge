@@ -1,16 +1,16 @@
 //! Parser INI minimale con **ordine delle sezioni preservato**.
 //!
-//! I file di contenuto del gioco (`surfaces.ini`, `sounds.ini`, `setup.ini`, …)
+//! Game content files (`surfaces.ini`, `setup.ini`, …)
 //! sono INI piatti in stile Assetto Corsa: sezioni `[NOME]`, coppie
 //! `chiave = valore`, commenti `;`. L'ordine conta — ad esempio in
 //! `surfaces.ini` l'indice della sezione è l'indice della superficie — quindi
 //! questo parser conserva l'ordine di inserimento invece di usare una
 //! `HashMap` come fa il reader delle auto.
 //!
-//! * le chiavi sono confrontate **senza distinzione di maiuscole/minuscole**
-//! * `parse_f32` accetta la virgola decimale (`0,94`), che AC usa a volte
-//! * una chiave ripetuta nella stessa sezione vince l'ultima occorrenza
-//! * il BOM UTF-8 iniziale viene ignorato
+//! * keys are compared **case-insensitively**
+//! * `parse_f32` accepts the decimal comma (`0,94`), which AC uses sometimes
+//! * a repeated key in the same section wins the last occurrence
+//! * the BOM UTF-8 initial is ignored
 
 use std::fs;
 use std::path::Path;
@@ -57,7 +57,7 @@ impl IniSection {
         self.values.len()
     }
 
-    /// `true` quando la sezione non ha chiavi.
+    /// `true` when the section has no keys.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }

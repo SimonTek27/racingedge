@@ -1,11 +1,11 @@
-//! Freni — modello termico disco/pinza e usura pastiglie/disco.
+//! Brake — disc/piston thermal model and pad/disc wear.
 //!
-//! Port di `src/engine/physics/BrakeThermalModel.{h,cpp}` di ksengine, più il
-//! sistema di usura `BrakeWearSystem.{h,cpp}`. Quest'ultimo è *codice morto*
-//! nel riferimento (escluso dalla lista sorgenti perché ridichiara
-//! `BrakeThermalConfig`/`BrakeThermalState` con un layout diverso): qui i tipi
-//! termici del sistema di usura sono rinominati `BrakeWearThermal*` per evitare
-//! la collisione, come suggerito dalla nota in `BrakeWearSystem.h`.
+//! Port of `src/engine/physics/BrakeThermalModel.{h,cpp}` from ksengine, plus
+//! the wear system `BrakeWearSystem.{h,cpp}`. The latter is *dead code*
+//! in the reference (excluded from source list because it redeclares
+//! `BrakeThermalConfig`/`BrakeThermalState` with a different layout): here
+//! the wear system's thermal types are renamed `BrakeWearThermal*` to avoid
+//! collision, as suggested by the note in `BrakeWearSystem.h`.
 
 // ── Modello termico per angolo (BrakeThermalModel) ──────────────────────────
 

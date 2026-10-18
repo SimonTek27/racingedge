@@ -1,8 +1,7 @@
 # racingedge
 
 A Rust / [Bevy](https://bevyengine.org) racing game plus a **content-modding
-suite**, built with the help of [REA](https://github.com/morluto/rea)
-(“Reverse Engineer Anything”).
+suite**.
 
 The suite currently targets **FSB5 sound banks** — the audio containers produced
 by the stock content-authoring tool — so custom audio content can be inspected,
@@ -18,29 +17,37 @@ extracted and re-authored.
 | --- | --- |
 | `src/lib.rs` | Library root shared by the game and the CLI tools |
 | `src/editor/audio/mod.rs` | Facade that re-exports the [`ramod`](https://github.com/SimonTek27/RaMOD) FSB5 middleware |
-| `src/editor/audio/sounds_ini.rs` | `sounds.ini` event map (per-car / per-track audio routing) |
+| `src/editor/audio/sounds_json.rs` | `sounds.json` event map (per-car / per-track audio routing) |
 | `src/editor/track/` | Track data: `data.json` metadata and the `surfaces.ini` grip grid |
 | `src/editor/ini.rs` | Ordered INI reader shared by the content editors |
 | `src/formats/` | Binary format readers shared by the game and the CLI: `.ksanim` node animations, `.kn5` AC mesh containers, `.ai` spline lines and replay files |
 | `src/net/telemetry.rs` | Telemetry out: UDP `:20777` and TCP `:20778` (`KSIM` v2 frames) |
+| `src/net/car_state_sync.rs` | LAN car-state sync: UDP `:40001` (`0x4B534353` packets) + remote interpolation |
+| `src/net/discovery.rs` | LAN server discovery: UDP `:20779` (`0x4B534449` Query/Announce/Reply) |
+| `src/net/matchmaking.rs` | LAN + soft-fail HTTP lobby registry (`GET`/`POST /servers`), browser rows |
+| `src/net/control_api.rs` | InSim-style control API on TCP `:20780` (auth + `EVT` events) |
+| `src/net/ac_shared_memory.rs` | Assetto Corsa `Local\acpmf_*` shared-memory pages for third-party apps |
+| `src/scripting/` | Mod SDK scripting on [`rhai`](https://rhai.rs): `ScriptHost` (`ks.log/get/set/on/version`, event dispatch) + mod loading and hot reload |
 | `src/editor/audio/plugin.rs` | Bevy `AudioPlugin`: loads FSB banks into playable assets |
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
 | `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension (incl. kinematic LUTs), brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
-track ambience events from `audio_config.ini`, race HUD/telemetry overlay, dynamic track-surface grip grid (rubbering/marbles/wetness) with banking/elevation models |
+track ambience events from `audio_config.ini`, race HUD/telemetry overlay, dynamic track-surface grip grid (rubbering/marbles/wetness) with banking/elevation models, weather evolution, a 1 kHz fixed-step loop, a replay runtime and a multi-car manager with AI spline following |
 | `src/plugins/` | Game-side Bevy plugins (`physics`) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
+| `src/bin/racingedge_server.rs` | The headless dedicated server (`racingedge-server`) |
+| `src/simulator/server.rs` | Headless session loop, config (INI + CLI) and control handler shared by the server binary |
+| `src/c_api.rs` | The C ABI (`extern "C"`) for headless hosts, mirrored by `include/racingedge.h` |
 | `assets/vorbis_setup_headers.bin` | Provenance copy of the 161 bundled setup headers (the runtime asset lives in `ramod`) |
 | `tools/build_vorbis_setup_headers.py` | Regenerates that asset from `reference/` |
-| `tools/rea_analysis.cmd` | Runs the REA analysis that produced `evidence/` |
-| `REA_FINDINGS.md` | What REA revealed about the stock authoring tool (v2.03.13) |
-| `docs/REA_GUIDE.md` | How to run REA |
 | `docs/KSENGINE_PORT_BACKLOG.md` | What [`ksengine`](https://github.com/SimonTek27/ksengine) has that this project can grow into |
 
 The FSB5 parser/writer, the Vorbis ↔ Ogg tooling and the PCM → Vorbis encoder
 live in the **[`ramod`](https://github.com/SimonTek27/RaMOD)** crate (a git
 dependency), so the game and the CLI share exactly one implementation;
-`src/editor/audio/` re-exports it and adds the Bevy integration.
+`src/editor/audio/` re-exports it and adds the Bevy integration. Mod scripting
+uses the pure-Rust [`rhai`](https://rhai.rs) engine (built with its `sync`
+feature) so no C toolchain is required.
 
 ## Build & test
 
@@ -79,9 +86,6 @@ cargo run --bin rea_bridge -- --help
 | `fsb-edit <in.fsb> <out.fsb> [opts]` | Edit a bank in place: rename, set loop, change rate, replace PCM audio |
 | `fsb-import-ogg <out.fsb> <in.ogg>` | Build a Vorbis bank from an `.ogg` file (`--name <name>`) |
 | `fsb-encode <out.fsb> <in.wav>` | Encode a `.wav` to a Vorbis bank using the stock encoder (`--name`, `--quality 0-100`) |
-| `analyze-native-binary <path>` | Print the REA `analyze` workflow for a native binary |
-| `generate-rust-code <file>` | Translate REA pseudocode into a Rust/Bevy skeleton |
-| `parse-fmod-bank <bank> <header>` | Plan an FSB parse from REA header information |
 
 Example:
 
@@ -127,23 +131,6 @@ nameTableSize` is a multiple of 32) and is padded to the same boundary
 Every built bank is parsed back before it is written, so a successful build is
 guaranteed to be readable by the suite.
 
-## REA reverse engineering
-
-REA (`rea-agents` 6.5.0) drives **Ghidra 12.1.4** to analyse the stock
-content-authoring tool's binaries. The headline result: its `libfsbvorbis64.dll`
-is **stock Xiph libvorbis**, and the FSB5 Vorbis wire format is fully
-characterised.
-
-See [`REA_FINDINGS.md`](REA_FINDINGS.md) for the evidence, the complete
-libvorbis export inventory, and the decoded VORBISDATA / packet structures.
-
-Reproduce with:
-
-```cmd
-npx -y rea-agents@latest analyze "C:\Program Files\FMOD SoundSystem\FMOD Studio 2.03.13\libfsbvorbis64.dll" --format json
-npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 2.03.13\libfsbvorbis64.dll" --pattern "vorbis|sample|decode|channel|packet|codec|fsb" --kind procedures --mode regex --format json
-```
-
 ## What works today
 
 * **Parse** FSB5 banks: header, per-sample headers, metadata chunks
@@ -185,7 +172,7 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   list rebuilds automatically whenever the library changes.
 * **Read track and audio metadata**: `Track::discover` loads a track's
   `data.json` (name, spline length, width) and `surfaces.ini` grip grid, and
-  `SoundsIni` parses a car's or track's `sounds.ini` event map — the same data
+  `SoundsJson` parses a car's or track's `sounds.json` event map — the same data
   the reference engine uses.
 * **Read AC meshes**: `formats::kn5` parses the Assetto Corsa `.kn5` container
   (magic `sc6969`, versions 4/5/6): textures, materials (with shader properties
@@ -206,6 +193,50 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   `:20778`, with the same wire format and ports as the reference engine, so
   existing dashboards and telemetry tools can consume them. Off by default:
   opt in with `TelemetryConfig { enabled: true, ..default() }`.
+* **Sync cars over LAN**: `car_state_sync` ports the ksengine `CarStateSync`
+  broadcast (magic `0x4B534353`, UDP `:40001`, host/client roles, 20 Hz rate
+  limit) and the `RemoteCarInterpolator` (32-slot ring, 100 ms delay, velocity
+  extrapolation) so remote cars stay smooth despite jitter. Off by default.
+* **Find servers**: `discovery` ports the `ServerDiscovery` broadcast (magic
+  `0x4B534449`, UDP `:20779`, Query/Announce/Reply, 2 s announcements, 8 s
+  expiry) and `matchmaking` merges the LAN list with an optional HTTP lobby
+  registry (`POST`/`GET /servers`), degrading gracefully when no lobby URL is
+  configured.
+* **Control the sim remotely**: `control_api` serves the InSim-style TCP
+  channel on `:20780` (one client, UTF-8 line protocol, optional `AUTH` token),
+  handling `PING`/`AUTH` itself and dispatching the rest to a `ControlHandler`
+  that replies with `OK`/`ERR` lines and `EVT` events.
+* **Feed third-party AC apps**: `ac_shared_memory` publishes the AC-compatible
+  `acpmf_physics` / `acpmf_graphics` / `acpmf_static` pages (Live Timers,
+  SimTools, dashboards) with the 592-byte mapping floor AC readers expect, and
+  falls back to an in-process mirror when no mapping can be created.
+* **Script mods**: `scripting::ScriptHost` runs mod `.rhai` scripts against the
+  `ks` prelude (`ks.log`/`ks.get`/`ks.set`/`ks.on`/`ks.version`), and
+  `load_mod_scripts` + `dispatch` drive events to `on_<event>` handlers with a
+  filename-ordered load and a `ScriptHotReloader` for live reload.
+* **Run a headless server**: `racingedge-server` (built on `simulator::server`)
+  drives a session with a built-in pace driver, hosts LAN discovery and the
+  control API, spawns an optional AI field, and supports an INI config file plus
+  command-line overrides:
+
+  ```sh
+  # time-limited practice, real-time pacing, default ports
+  cargo run --bin racingedge_server -- --time 300
+
+  # 10-lap race with 4 AI cars, announced on the LAN
+  cargo run --bin racingedge_server -- --laps 10 --track-length 5793 \
+      --ai 4 --announce --name "Monza Practice"
+
+  # fastest possible, custom ports, hard 60 s sim cap
+  cargo run --bin racingedge_server -- --fast --duration 60 \
+      --discovery-port 20879 --control-port 20880
+  ```
+* **Embed the engine from C**: `c_api` exports a stable, null-safe `extern "C"`
+  surface (`re_engine_create`/`_step`/`_get_state`, session control) declared in
+  the hand-written `include/racingedge.h`. The crate builds as a `cdylib`, so a
+  host can drive a fixed-step vehicle and session without linking Rust; no
+  header generator is used, and a test keeps the header and the exported symbols
+  in sync.
 * **Time laps and plan races**: `LapTimer` (event-driven) and `LapSectorTimer`
   (AC-style, spline-derived sectors) in `simulator/timing.rs`, a file-backed
   per-track/car `PersonalBestStore` (`.pb`), `StrategySimulator` fuel/pit-stop
@@ -252,16 +283,24 @@ npx -y rea-agents@latest search  "C:\Program Files\FMOD SoundSystem\FMOD Studio 
   through sampled LUTs and derives the anti-roll bar force. `track_surface`
   keeps a world-space grip grid where rubbering, marbles and wetness evolve per
   cell, alongside a section-based surface model and banking/elevation maths.
+  `weather` evolves ambient/track temperature, rain wetness and wind from a
+  preset and exposes the resulting grip reduction, aquaplaning risk and wind
+  force. `loop` provides the deterministic 1 kHz fixed-timestep accumulator
+  (`PHYSICS_DT`) that turns variable frame time into whole physics steps.
+  `replay_runtime` drives `ReplayRecorder` from that loop and bridges
+  `VehicleState` into replay samples, and `multi_car` adds the multi-car
+  manager with an AI spline follower (speed-scheduled lookahead, curvature
+  feedforward, lap counting and traffic overtaking) plus grid placement and
+  collision detection.
 
 ## Roadmap
 
-1. Deeper REA verification of the FSB container code via `--snapshot`.
-2. Batch conversion and sample grafting (`--into` to add or replace a sample
+1. Batch conversion and sample grafting (`--into` to add or replace a sample
    inside an existing bank).
-3. Assemble the `src/simulator/` runtime into the game binary (physics plugin,
+2. Assemble the `src/simulator/` runtime into the game binary (physics plugin,
    cockpit HUD, car audio) — the plumbing is tracked in the
    [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
-4. Continue the ksengine port backlog: the remaining track/model formats,
+3. Continue the ksengine port backlog: the remaining track/model formats,
    the Phase 2 driving-experience items (garage/pit, cameras, HUD),
    multiplayer sync and the AC shared-memory bridge.
 

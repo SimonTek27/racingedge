@@ -1273,7 +1273,7 @@ impl Default for PitCarBody {
 pub struct PitCollisionContact {
     /// Auto A.
     pub car_a: i32,
-    /// Auto B, oppure -1 per il muro.
+    /// Car B, or -1 for the wall.
     pub car_b: i32,
     /// Normale X (da B verso A).
     pub nx: f32,

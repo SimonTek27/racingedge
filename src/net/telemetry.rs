@@ -7,9 +7,9 @@
 //! * **TCP** (default `:20778`) — framing `[u32 LE len][payload]`, in broadcast a
 //!   tutti i client connessi.
 //!
-//! Il payload è [`TelemetryFrame`]: un blocco a **layout fisso, little-endian, di
-//! 108 byte** (nessun padding implicito di struct — l'encoding è fatto campo per
-//! campo), preceduto da `magic: u32`, `version: u16`, `size: u16`.
+//! The payload is [`TelemetryFrame`]: a **fixed-layout, little-endian** block of
+//! 108 bytes (no implicit struct padding — encoding is field by field), preceded by `magic: u32`,
+//! `version: u16`, `size: u16`.
 //!
 //! ```
 //! use racingedge::net::telemetry::{TelemetryFrame, PACKET_SIZE};

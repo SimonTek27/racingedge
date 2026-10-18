@@ -1166,11 +1166,11 @@ pub fn calculate_impact_force(energy: f32, _mass: f32) -> f32 {
     (2.0 * energy * effective_stiffness).sqrt()
 }
 
-// ── Ponte rFactor2 (Rf2DamageModel) ─────────────────────────────────────────
+// ── Damage model ────────────────────────────────────────────────────────────
 
-/// Parametri del ponte rF2 (port di `Rf2DamageParams`).
+/// Damage parameters (port of ksengine impulse mapping).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rf2DamageParams {
+pub struct DamageParams {
     /// Impulso "morbido".
     pub soft_impulse: f32,
     /// Impulso "duro".
@@ -1185,7 +1185,7 @@ pub struct Rf2DamageParams {
     pub enabled: bool,
 }
 
-impl Default for Rf2DamageParams {
+impl Default for DamageParams {
     fn default() -> Self {
         Self {
             soft_impulse: 500.0,
@@ -1205,10 +1205,10 @@ pub fn impulse_from_impact(relative_speed_ms: f32, mass_kg: f32) -> f32 {
     m * v * 0.35
 }
 
-/// Applica un impulso rF2 (port di `applyRf2Impulse`).
-pub fn apply_rf2_impulse(
+/// Applies an impulse (port of `applyRf2Impulse`).
+pub fn apply_impulse(
     dmg: &mut DamageSystem,
-    params: &Rf2DamageParams,
+    params: &DamageParams,
     impulse: f32,
     contact_point: Vec3,
     contact_normal: Vec3,
@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn rf2_impulse_maps_energy() {
+    fn impulse_maps_energy() {
         let mut dmg = DamageSystem::new();
         dmg.set_config(DamageConfig {
             impact_threshold: 1.0,
@@ -1988,9 +1988,9 @@ mod tests {
         });
         let impulse = impulse_from_impact(30.0, 1500.0);
         assert!(impulse > 0.0);
-        apply_rf2_impulse(
+        apply_impulse(
             &mut dmg,
-            &Rf2DamageParams::default(),
+            &DamageParams::default(),
             impulse,
             Vec3::new(0.0, 0.5, 2.0),
             Vec3::new(0.0, 0.0, -1.0),

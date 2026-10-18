@@ -1,7 +1,7 @@
 //! `<track>/data/surfaces.ini` — griglia di superfici della pista.
 //!
 //! Port di ksengine `adapters/assetto_corsa/AcSurfacesLoader`. Ogni sezione
-//! `[SURFACE_n]` descrive una superficie; l'indice della sezione è l'indice con
+//! `[SURFACE_n]` describes a surface; the section index is the index with
 //! cui la mesh della pista la referenzia.
 //!
 //! Chiavi lette:
@@ -35,7 +35,7 @@ pub const ASPHALT_KEY: &str = "ASPHALT";
 /// Una superficie dichiarata da `surfaces.ini`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceDef {
-    /// Nome logico della superficie (`KEY`, oppure il nome della sezione).
+    /// Logical surface name (`KEY`, or the section name).
     pub key: String,
     /// Grip di riferimento.
     pub friction: f32,

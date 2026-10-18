@@ -16,8 +16,8 @@
 //! ```
 //!
 //! Il recorder registra a ~60 Hz (scarta i frame più ravvicinati di 1/60 s) e la
-//! riproduzione interpola linearmente tra due frame adiacenti (la marcia è uno
-//! snap al frame più vicino, con soglia 0.5).
+//! playback linearly interpolates between adjacent frames (the gear is one
+//! snap to the nearest frame with a 0.5 threshold).
 
 use std::path::Path;
 

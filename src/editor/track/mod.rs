@@ -1,4 +1,4 @@
-//! Editor dei dati pista in stile Assetto Corsa.
+//! Track data editor in Assetto Corsa style.
 //!
 //! Port di ksengine `adapters/assetto_corsa/TrackDataJsonLoader` +
 //! `AcSurfacesLoader`: legge la cartella `data/` di una pista e ne espone i
@@ -7,10 +7,10 @@
 //! * [`data`] — `data.json`: nome, lunghezza spline, larghezza.
 //! * [`surfaces`] — `surfaces.ini`: grip, smorzamento e sporco per superficie.
 //!
-//! Entrambi i loader sono **tolleranti**: un file assente non è un errore e ogni
-//! chiave mancante ricade sul default di Assetto Corsa. [`Track::discover`]
-//! restituisce `None` solo quando nella cartella non c'è né `data.json` né
-//! `surfaces.ini`.
+//! Both loaders are **tolerant**: a missing file is not an error and every
+//! missing key falls back to Assetto Corsa defaults. [`Track::discover`]
+//! returns `None` only when there is neither `data.json` nor
+//! `surfaces.ini` in the folder.
 //!
 //! ```ignore
 //! let track = Track::discover("content/tracks/ks_mugello").unwrap();
@@ -54,8 +54,8 @@ impl Track {
 
     /// Carica una pista da `<track>/data/{data.json,surfaces.ini}`.
     ///
-    /// Restituisce `None` se non c'è nulla da leggere; un singolo file presente
-    /// è sufficiente e l'altro resta ai default.
+    /// Returns `None` if there is nothing to read; a single present file
+    /// is sufficient and the other remains at defaults.
     pub fn discover(track_dir: impl AsRef<Path>) -> Option<Self> {
         let track_dir = track_dir.as_ref();
         let data_dir = Self::resolve_data_dir(track_dir);
@@ -108,7 +108,7 @@ impl Track {
         self.surface(ROAD_KEY).or_else(|| self.surface(ASPHALT_KEY))
     }
 
-    /// Grip da usare quando la superficie indicata non è dichiarata.
+    /// Grip to use when the indicated surface is not declared.
     pub fn grip_of(&self, key: &str) -> f32 {
         self.surface(key)
             .or_else(|| self.base_surface())

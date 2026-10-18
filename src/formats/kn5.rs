@@ -1,8 +1,8 @@
 //! `.kn5` — contenitore di mesh di Assetto Corsa (port di ksengine `Kn5Reader.*`).
 //!
 //! Formato binario little-endian, verificato byte-per-byte su ~2770 file reali.
-//! Il magic è la stringa ASCII `sc6969` (non `KN5\0`/`0x346E6B73` come assumeva
-//! il vecchio `KN5Parser`).
+//! The magic is the ASCII string `sc6969` (not `KN5\0`/`0x346E6B73` as assumed
+//! by the old `KN5Parser`).
 //!
 //! ```text
 //! char   magic[6]     = "sc6969"
@@ -25,8 +25,8 @@
 //! la traslazione vive in `[12..14]` e un figlio compone `world = local * parent`.
 //!
 //! Il port mantiene la fedeltà del reader C++: limiti su count/profondità,
-//! tolleranza ai byte finali dopo l'albero dei nodi e ai nomi non-ASCII, e
-//! rifiuto dei due file cifrati terzi noti (controllo del magic).
+//! tolerance to trailing bytes after the node tree and to non-ASCII names, and
+//! rejection of two known encrypted files (magic check).
 
 use std::path::Path;
 

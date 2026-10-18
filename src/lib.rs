@@ -8,9 +8,12 @@
 //! * [`plugins`] — the game-side Bevy plugins (physics).
 //! * [`net`] — runtime networking and telemetry (ksengine port).
 //! * [`simulator`] — the runtime vehicle simulator (ksengine port).
+//! * [`c_api`] — the C ABI for headless hosts (`include/racingedge.h`).
 
+pub mod c_api;
 pub mod editor;
 pub mod formats;
 pub mod net;
 pub mod plugins;
+pub mod scripting;
 pub mod simulator;

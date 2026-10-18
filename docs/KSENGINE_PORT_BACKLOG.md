@@ -54,7 +54,7 @@ Two migration gotchas worth remembering:
 | Item | Where it landed | Tests |
 | --- | --- | --- |
 | A2 track data | `src/editor/track/` (`data.rs`, `surfaces.rs`, `mod.rs`) | 15 unit tests |
-| A9 `sounds.ini` | `src/editor/audio/sounds_ini.rs` | 7 unit tests |
+| A9 `sounds.json` | `src/editor/audio/sounds_json.rs` | 9 unit tests |
 | A14 JSON fonts | `src/simulator/fonts.rs` — JSON bitmap-font definitions for cockpit digital instruments (per-glyph `width`, `x_offset`, `y_offset`, text measurement) | 5 unit tests + 2 doc tests |
 | B11 timing | `src/simulator/timing.rs` (`LapTimer` = `phys_LapTimer`, `LapSectorTimer`), `src/simulator/personal_best.rs` (`PersonalBestStore`, file-backed `.pb`) | 16 + 9 unit tests + 2 doc tests |
 | B10 strategy | `src/simulator/strategy.rs` — `StrategySimulator`: fuel planning + pit-stop recommendation | 7 unit tests |
@@ -77,15 +77,26 @@ Two migration gotchas worth remembering:
 | A1 KN5 | `src/formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6): textures, materials, node hierarchy (Base/Mesh/SkinnedMesh), world matrices, bounds-checked cursor, `to_bevy_mesh` conversion | 17 unit tests |
 | A3 AI spline | `src/formats/ai_spline.rs` — `read_spline`/`write_spline` (`0x00414900` v1), text fallback, cumulative distance + closed-loop detection | 11 unit tests |
 | A7 replay | `src/formats/replay.rs` — `ReplayRecorder` (`RPLY` v1): 60 Hz recording, save/load, playback with speed/seek and linear frame interpolation | 13 unit tests |
+| D4 replay runtime | `src/simulator/replay_runtime.rs` — `ReplayRuntime` (record/playback driven by `SimulationLoop`, seek/speed clamp, save/load) + `vehicle_sample` bridging `VehicleState` to `ReplaySample`. The Bevy playback plugin lands with the app | 10 unit tests |
 | B7 suspension kinematics | `src/simulator/suspension_kinematics.rs` — `SuspensionKinematics` (damper curve, camber/bump-steer LUTs, anti-roll bar, `stock()` presets) | 8 unit tests |
 | B8 track surface | `src/simulator/track_surface.rs` — `TrackSurface` grip grid (rubber/marbles/wetness/temperature per cell, radial deposit, material grips, off-track/kerb), `TrackSurfaceModel` (surface sections + grip modifier, wet reduction, curb effect, rolling resistance), `BankingModel`/`ElevationModel` | 15 unit tests |
+| B9 weather | `src/simulator/weather.rs` — `WeatherState` (grip reduction, aquaplaning risk, dry/wet tests, shared with `track_audio`), `WeatherSimulator` (wetness/temperature/wind evolution, presets, effects), `WeatherConfig`, `WeatherPreset` + `TimeOfDayState` | 14 unit tests |
+| B14 fixed-step loop | `src/simulator/loop.rs` — `SimulationLoop` (1 kHz accumulator → whole `PHYSICS_DT` steps, Bevy `Resource`), wired into `plugins/physics.rs` | 5 unit tests |
+| D7 multi-car + AI | `src/simulator/multi_car.rs` — `AiController` (spline follower: speed-scheduled lookahead, curvature feedforward, derivative damping, lap detection, traffic overtaking), `MultiCarManager` (car entries, grid placement, traffic list, collision detection) and `CarKinematics` stand-in for `VehicleSimulator` | 19 unit tests |
+| E1 car-state sync | `src/net/car_state_sync.rs` — `CarStateSync` (UDP `:40001`, magic `0x4B534353`, host/client roles, 20 Hz rate limit, packet encode/decode) + `RemoteCarInterpolator` (32-slot ring, 100 ms delay, velocity extrapolation) and a `CarStateSyncPlugin` | 19 unit tests |
+| E2 discovery + matchmaking | `src/net/discovery.rs` (`ServerDiscovery`: UDP `:20779`, magic `0x4B534449`, Query/Announce/Reply, 2 s announce, 8 s expiry) + `src/net/matchmaking.rs` (`Matchmaking`: LAN merge + soft-fail HTTP lobby `POST`/`GET /servers`, browser rows, JSON helpers) | 20 unit tests |
+| E3 control API | `src/net/control_api.rs` — `ExternalControlApi` (TCP `:20780`, one client, line protocol, auth token) + `ControlSession` (PING/AUTH/UNAUTH gating, dispatch to a `ControlHandler`) and `EVT` events | 10 unit tests |
+| E5 AC shared memory | `src/net/ac_shared_memory.rs` — `AcSharedMemoryPublisher` publishing the three AC pages (`Local\acpmf_*`, 592-byte floor, soft in-process mirror) + `AcLiveInput`, `AcPhysicsPage`/`AcGraphicsPage`/`AcStaticPage`, `fill_*`, `format_ac_time`, `ks_race_flag_to_ac_flag` | 13 unit tests |
+| H1 mod SDK scripting | `src/scripting/` — `ScriptHost` (rhai facade: `ks.log/get/set/on/version`, `eval`, `run_script`, `get/set_number`, `call_function`, `emit_event`, `take_log`) + `mod_sdk.rs` (`LoadReport`, `load_mod_scripts`, `dispatch`, `install`, `ScriptHotReloader`) | 19 unit tests |
+| H3 headless server | `src/simulator/server.rs` (`ServerConfig`/`parse_args` INI+CLI, `HeadlessServer` session loop over `SessionFlow` + `MultiCarManager` + `ServerDiscovery` + `ExternalControlApi`, `ServerControlHandler`) + `src/bin/racingedge_server.rs` (signals, real-time slice, status/timeout exit codes) | 13 unit tests |
+| H2 C API | `src/c_api.rs` (`ReEngine` over `VehicleConfig`/`VehicleState` + `SessionFlow`: create/destroy/reset, timestep, input, step, state, version, session configure/start/phase/lap/time/remaining) + hand-written `include/racingedge.h` and `[lib] crate-type = ["rlib", "cdylib"]` | 9 unit tests + 1 doc test |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (363 unit tests) and `cargo test --doc` (9 doc tests)
+`cargo test --all-targets` (517 unit tests) and `cargo test --doc` (17 doc tests)
 all pass.
 
 ---
@@ -111,6 +122,8 @@ all pass.
 | `src/simulator/hud.rs` | `src/simulator/DashboardOverlay.{h,cpp}`, `TelemetryOverlay.{h,cpp}`, `src/simulator/ui/RaceTelemetryHud.h` |
 | `src/simulator/suspension_kinematics.rs` | `src/engine/physics/SuspensionKinematics.h` |
 | `src/simulator/track_surface.rs` | `src/engine/physics/TrackSurface.h`, `TrackPhysics.*` |
+| `src/simulator/weather.rs` | `src/engine/physics/WeatherPhysics.*`, `WeatherConfig.*`, `src/simulator/WeatherControl.h` |
+| `src/simulator/loop.rs` | `src/simulator/SimulationLoop.h` (`m_physicsDt` fixed timestep) |
 | `src/simulator/aero.rs`, `suspension.rs`, `brakes.rs`, `electronics.rs` | `AeroModel`, `SuspensionModel`, `BrakeThermalModel`, `HybridSystem`/`ErsDrcController` (all partial) |
 | `src/simulator/ac_import.rs`, `car_data.rs` | `FileFormat/INIParser.*`, `CarPhysicsJson.*`, `adapters/assetto_corsa/TrackDataJsonLoader.h` |
 | `src/formats/kn5.rs` | `src/engine/FileFormat/Kn5Reader.*` |
@@ -133,7 +146,7 @@ all pass.
 | A6 | `formats/setup.rs` — setup `.ini` + `setup.json` per car | `Simulator/SetupFile.h`, `SetupJson.h` | S/M |
 | A7 ✅ | `formats/replay.rs` — replay record/playback | `Simulator/ReplayRecorder.*` | M |
 | A8 | `formats/telemetry_log.rs` — telemetry dump/read (v2, damage channels) | `physics/TelemetryPhysics.*`, `UdpTelemetryBridge.h` | S |
-| A9 ✅ | `editor/audio/sounds_ini.rs` — `sounds.ini` event routing parser | `Simulator/SoundsIniParser.*` | S |
+| A9 ✅ | `editor/audio/sounds_json.rs` — `sounds.json` event routing parser | `Simulator/SoundsIniParser.*` | S |
 | A10 | `formats/vehicle_meta.rs` — `materials.txt`, `team.ini`, `upgrades.ini`, livery bundle | `engine/vehicle/VehicleUpgradeSystem.h`, `VehicleAppearanceBundle.h` | S/M |
 | A11 | `formats/csp_config.rs` — CSP-style key/value config | `engine/Config/CspConfigParser.*` | S |
 | A12 | CLI: **FSPRO ↔ KSAudio ↔ FSB** conversion | `FileFormat/FSPROImporter/Exporter.*`, `KSAudio*` | M |
@@ -152,12 +165,12 @@ all pass.
 | B6 ✅ | `aero_draft.rs` — slipstream / tow | `AeroDraft.h` | S |
 | B7 ✅ | Suspension kinematics (camber/toe vs travel, ARB, ride height) | `SuspensionKinematics.h` | M |
 | B8 ✅ | `track_surface.rs` — dynamic grip grid: rubbering, marbles, per-sector wetness | `TrackSurface.h`, `TrackPhysics.*` | M/L |
-| B9 | `weather.rs` — weather keyframes, grip vs wetness, track temperature | `WeatherPhysics.*`, `WeatherConfig.*`, `physics/weather/` | M |
+| B9 ✅ | `weather.rs` — weather keyframes, grip vs wetness, track temperature | `WeatherPhysics.*`, `WeatherConfig.*`, `physics/weather/` | M |
 | B10 ✅ | `strategy.rs` — fuel planning + pit strategy (ksengine has no separate `FuelSystem`; fuel lives in `StrategySimulator`, so the port keeps it together) | `StrategySimulator.*` | S/M |
 | B11 ✅ | `timing.rs` — lap/sector timer + per-track/car personal bests (`PersonalBestStore` in `personal_best.rs`) | `phys_LapTimer.*`, `LapSectorTimer.h`, `PersonalBestStore.h` | S/M |
 | B12 | `physics_validate.rs` — validator + golden reference tests | `PhysicsValidator.*`, `PhysicsGolden.h` | S/M |
 | B13 | `physics_profile.rs` — physics/frame profiler | `PhysicsProfiler.*`, `GpuProfiler.*` | S |
-| B14 | `loop.rs` — deterministic fixed timestep (1 kHz, as kssim) | `SimulationLoop::m_physicsDt` | M |
+| B14 ✅ | `loop.rs` — deterministic fixed timestep (1 kHz, as kssim) | `SimulationLoop::m_physicsDt` | M |
 
 ## 4. Audio — extend `car_sound.rs` / `rebank.rs`
 
@@ -178,10 +191,10 @@ all pass.
 | D1 ✅ | `feature_hub.rs` — Bevy resource (session, flow, PB). Discovery/control sockets attach with E2/E3, track limits with D3, weather with B9, replay with D4 | `Simulator/FeatureHub.h` | M |
 | D2 ✅ | `session.rs` + `session_flow.rs` — practice/qualifying/race, flags, penalties, countdown, grid publish, standings | `RaceSession*.*`, `RaceFlag.h`, `SessionFlow.h` | M/L |
 | D3 ✅ | `track_limits.rs` — track cut, penalties (pit speeding still to do) | `TrackLimitsMonitor.h` | M |
-| D4 | Replay recorder + playback (the recorder/player model + format landed with A7 in `formats/replay.rs`; app-layer recording/playback wiring remains) | `ReplayRecorder.*` | M |
+| D4 ✅ | Replay recorder + playback (the recorder/player model + format landed with A7 in `formats/replay.rs`; app-layer recording/playback wiring remains) | `ReplayRecorder.*` | M |
 | D5 ✅ | Garage/pit state machine: garage exit → queue → collision → repair → strategy | `GarageExit.*`, `PitLaneQueue/Collision/Repair.h`, `PitStrategyBridge.h` | M/L |
 | D6 ✅ | Setup garage UI + setup persistence per car/track (model, navigation and persistence ported; Bevy UI screen deferred to the app) | `SetupGarage.*`, `ApplySetup.h` | M |
-| D7 | Multi-car manager + AI traffic (spline following) | `MultiCarManager.*`, `AIController.*`, `AIDriver.h` | L |
+| D7 ✅ | Multi-car manager + AI traffic (spline following) | `MultiCarManager.*`, `AIController.*`, `AIDriver.h` | L |
 | D8 ✅ | Input & FFB: gamepad, DirectInput wheels, force feedback output (HW polling/actuators behind traits, attached by the app) | `InputManager.*`, `devices/*`, `FfbOutput.h` | M/L |
 | D9 ✅ | `camera.rs` — cockpit / cinematic / replay cameras | `CameraController.*` | S |
 | D10 ✅ | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
@@ -193,11 +206,11 @@ all pass.
 
 | # | Module to write | ksengine reference | Effort |
 | --- | --- | --- | --- |
-| E1 | `net/car_state_sync.rs` — UDP, magic `KSCC`, :40001, 20 Hz + remote interpolation (32-slot ring, 100 ms) | `CarStateSync.h`, `RemoteCarInterpolator.h` | M |
-| E2 | LAN discovery (magic `KSDI`, :20779) + HTTP matchmaking | `ServerDiscovery.h`, `Matchmaking.h` | S/M |
-| E3 | Control API on TCP :20780 (`SESSION/WEATHER/TIME/LIMITS/PB/REPLAY/RESULT/PING/AUTH`, `EVT` events) | `ExternalControlApi.h`, `docs/CONTROL_API.md` | M |
+| E1 ✅ | `net/car_state_sync.rs` — UDP, magic `0x4B534353`, :40001, 20 Hz + remote interpolation (32-slot ring, 100 ms) | `CarStateSync.h`, `RemoteCarInterpolator.h` | M |
+| E2 ✅ | LAN discovery (magic `KSDI`, :20779) + HTTP matchmaking | `ServerDiscovery.h`, `Matchmaking.h` | S/M |
+| E3 ✅ | Control API on TCP :20780 (`SESSION/WEATHER/TIME/LIMITS/PB/REPLAY/RESULT/PING/AUTH`, `EVT` events) | `ExternalControlApi.h`, `docs/CONTROL_API.md` | M |
 | E4 ✅ | Telemetry out: UDP :20777 and TCP :20778 (`[u32 LE len][payload]`) | `UdpTelemetryBridge.h`, `TcpTelemetryBridge.h` | S/M |
-| E5 | AC shared memory (`Local\acpmf_physics`, `acpmf_graphics`, `acpmf_static`) for external apps | `adapters/assetto_corsa/AcSharedMemoryPublisher.*` | M |
+| E5 ✅ | AC shared memory (`Local\acpmf_physics`, `acpmf_graphics`, `acpmf_static`) for external apps | `adapters/assetto_corsa/AcSharedMemoryPublisher.*` | M |
 | E6 | Inbound AC channels: listener :20747, commands :9666, remote telemetry :9996 | `UdpTelemetryListener.*`, `UdpCommandListener.h`, `AcRemoteTelemetry.h` | M |
 | E7 | Optional MQTT bridge | `Simulator/MqttClient.*` | S |
 | E8 | Reliable-UDP netcode (Rust: `laminar`/`renet`) | `engine/network/ksnet/` | L |
@@ -227,9 +240,9 @@ all pass.
 
 | # | Module to write | ksengine reference | Effort |
 | --- | --- | --- | --- |
-| H1 | Mod SDK scripting (`on`/`dispatch`/`get`/`set`) with `mlua` or `rhai`, hot reload | `engine/Scripting/ModSdk*`, `ScriptHost.*`, `HotReloadManager.*` | M |
-| H2 | C API (`racingedge.h` + `cbindgen`) for headless hosts | `include/ksengine_c.h`, `engine/api/ksengine_c.cpp` | M |
-| H3 | Headless server binary | `tools/ks_server`, `Simulator/SimulatorServerApp.cpp` | M |
+| H1 ✅ | Mod SDK scripting (`on`/`dispatch`/`get`/`set`) with `mlua` or `rhai`, hot reload | `engine/Scripting/ModSdk*`, `ScriptHost.*`, `HotReloadManager.*` | M |
+| H2 ✅ | C API (`racingedge.h`, hand-written) for headless hosts | `include/ksengine_c.h`, `engine/api/ksengine_c.cpp` | M |
+| H3 ✅ | Headless server binary | `tools/ks_server`, `Simulator/SimulatorServerApp.cpp` | M |
 
 ## 10. Infrastructure
 
@@ -248,8 +261,8 @@ E4 ✅, I1 ✅. **Done.**
 **Phase 2 — driving experience.** D2 ✅, D3 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅,
 B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6 ✅, C1 ✅, C2 ✅, D10 ✅.
 
-**Phase 3 — depth and platform.** A1 ✅, A3 ✅, A7 ✅, B3, B7 ✅, B8, B9, B14, D4, D7, E1,
-E2, E3, E5, H1, H2, H3.
+**Phase 3 — depth and platform.** A1 ✅, A3 ✅, A7 ✅, B3 ✅, B7 ✅, B8 ✅, B9 ✅, B14 ✅, D4 ✅, D7 ✅, E1 ✅,
+E2 ✅, E3 ✅, E5 ✅, H1 ✅, H2 ✅, H3 ✅.
 
 **Phase 4 — editor and extended modding.** A12, A13, C3–C7, F1–F5, G1–G6,
 E6–E8.
@@ -258,7 +271,7 @@ E6–E8.
 
 1. **E4 telemetry out** — makes RacingEdge compatible with existing dashboards
    and telemetry tools straight away.
-2. **A2 + A9** (`data.json`, `surfaces.ini`, `sounds.ini`) — completes the AC
+2. **A2 + A9** (`data.json`, `surfaces.ini`, `sounds.json`) — completes the AC
    track/car content pipeline started by `ac_import.rs`.
 3. **B10 + B11 ✅** (fuel and timing/PB) — a complete race loop with lap times
    and pit stops.

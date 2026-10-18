@@ -1,7 +1,7 @@
 //! Audio 3D (doppler, attenuazione, pan) e volumi/pitch per evento.
 //!
 //! Port di `src/simulator/Audio3D.h` e `src/simulator/CarEventVolumes.h` di
-//! ksengine. Sono regole pure, tenute fuori dal mixer così restano testabili.
+//! ksengine. These are pure rules, kept out of the mixer so they remain testable.
 
 use std::collections::HashMap;
 

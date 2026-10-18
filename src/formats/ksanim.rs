@@ -11,8 +11,8 @@
 //!   version 2  : keyframeCount * 10 float (quat xyzw + trans xyz + scale xyz)
 //! ```
 //!
-//! La matrice è row-major con la traslazione in [12..14] — lo stesso layout
-//! dei nodi KN5, quindi una matrice animata può essere inserita direttamente
+//! The matrix is row-major with translation in [12..14] — the same layout
+//! of KN5 nodes, so an animated matrix can be inserted directly
 //! in un nodo senza conversione.
 //!
 //! Il port segue la struttura del reader C++ di ksengine: controlli di limite

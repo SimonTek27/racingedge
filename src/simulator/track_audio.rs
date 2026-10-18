@@ -1,7 +1,7 @@
 //! Audio di pista: eventi posizionati pilotati da `audio_config.ini`.
 //!
 //! Port di `src/simulator/TrackAudioManager.{h,cpp}` di ksengine. L'originale
-//! lascia `loadConfig` come segnaposto, quindi qui il formato ini è
+//! leaves `loadConfig` as a placeholder, so here the ini format is
 //! implementato per intero (una sezione per evento):
 //!
 //! ```ini
@@ -220,7 +220,7 @@ impl TrackAudioManager {
         }
     }
 
-    /// Avanza lo stato di tutti gli eventi (port di `update`).
+    /// Advances the state of all events (port of `update`).
     pub fn update(&mut self, dt: f32, weather: &WeatherState, _camera: CameraMode) {
         for ev in &mut self.events {
             let tv = Self::derive_trigger_value(&ev.config.trigger_variable, weather);

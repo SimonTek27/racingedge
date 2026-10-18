@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn locked_diff_transfers_torque_opposing_slip() {
-        // Port fedele: left più veloce (slip > 0) → transfer negativo, quindi la
+        // Port faithful: left faster (slip > 0) → negative transfer, therefore the
         // ruota sinistra riceve in più (400) e la destra in meno (0), come nel
         // riferimento `transfer = copysign(min(lock, |T|*0.5), -slip)`.
         let mut diff = DifferentialModel::with_config(DifferentialModel::locked());

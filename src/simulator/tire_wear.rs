@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn more_slip_generates_more_heat() {
         // Il riferimento dissipa per convezione verso l'ambiente: la
-        // temperatura sale solo se la generazione di calore la supera, quindi
+        // temperature rises only when heat generation exceeds it, therefore
         // confrontiamo un caso con forze elevate contro uno a forze nulle.
         let mut idle = TireWearSystem::new();
         let mut sliding = TireWearSystem::new();

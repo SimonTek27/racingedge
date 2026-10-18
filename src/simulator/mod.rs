@@ -19,11 +19,15 @@ pub mod ffb;
 pub mod fonts;
 pub mod hud;
 pub mod input;
+pub mod r#loop;
 pub mod lut;
+pub mod multi_car;
 pub mod personal_best;
 pub mod physics;
 pub mod pit;
 pub mod rebank;
+pub mod replay_runtime;
+pub mod server;
 pub mod session;
 pub mod session_flow;
 pub mod setup;
@@ -36,8 +40,8 @@ pub mod tire_wear;
 pub mod track_audio;
 pub mod track_limits;
 pub mod track_surface;
-pub mod weather;
 pub mod user_stats;
+pub mod weather;
 
 pub use ac_import::{load_car_auto, AcImporter};
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
@@ -51,10 +55,10 @@ pub use car_data::CarPhysicsData;
 pub use car_sound::CarSoundPlugin;
 pub use cockpit::{CockpitPlugin, CockpitTelemetry};
 pub use damage::{
-    apply_mechanical_impact, apply_mechanical_wear, apply_pit_contact_damage, apply_rf2_impulse,
+    apply_impulse, apply_mechanical_impact, apply_mechanical_wear, apply_pit_contact_damage,
     impulse_from_impact, sample_damage, sample_mechanical_effects, CollisionEvent, DamageConfig,
-    DamageSystem, DamageTelemSample, DamageType, DamageZone, MechEffectMultipliers, MechTelemetry,
-    MechWearConfig, RepairData, Rf2DamageParams,
+    DamageParams, DamageSystem, DamageTelemSample, DamageType, DamageZone, MechEffectMultipliers,
+    MechTelemetry, MechWearConfig, RepairData,
 };
 pub use drivetrain::{DiffConfig, DiffState, DiffType, DifferentialModel, GearboxModel};
 pub use feature_hub::FeatureHub;
@@ -67,6 +71,10 @@ pub use input::{
     key_from_name, key_name, load_keyboard_mapping, save_keyboard_mapping, ControllerBackend,
     ControllerState, InputManager, JoystickMapping, KeyboardMapping, AXIS_COUNT,
 };
+pub use multi_car::{
+    AiController, AiInput, AiOutput, AiTrafficCar, CarEntry, CarKinematics, CarPose, GridCar,
+    MultiCarManager,
+};
 pub use personal_best::{PersonalBestRecord, PersonalBestStore};
 pub use physics::{integrate_transform, step_vehicle, VehicleConfig, VehicleState};
 pub use pit::{
@@ -78,7 +86,13 @@ pub use pit::{
     PitLaneQueueConfig, PitLaneRepair, PitQueueEntry, PitQueueRole, PitQueueStatus,
     PitRepairConfig, PitRepairInput, PitRepairOutput, PitStrategyState,
 };
+pub use r#loop::{SimulationLoop, PHYSICS_DT};
 pub use rebank::{ensure_default_rebank, RebankBuilder};
+pub use replay_runtime::{vehicle_sample, ReplayRuntime};
+pub use server::{
+    is_safe_path, is_valid_port, parse_args, sanitize_name, usage, ConfigError, HeadlessServer,
+    ServerConfig, ServerControlHandler, ServerReport,
+};
 pub use session::{defaults_for_mode, GameSessionMode, RaceFlag, RaceSession, SessionStartParams};
 pub use session_flow::{SessionFlow, SessionFlowPhase};
 pub use setup::{
@@ -92,9 +106,7 @@ pub use tire_wear::{
     TireCompound, TireCompoundData, TireFlatSpot, TireFlatSpotState, TireThermalConfig,
     TireThermalState, TireWearConfig, TireWearDetailState, TireWearSystem,
 };
-pub use track_audio::{
-    AttenuationModel, AudioEventConfig, TrackAudioEvent, TrackAudioManager,
-};
+pub use track_audio::{AttenuationModel, AudioEventConfig, TrackAudioEvent, TrackAudioManager};
 pub use track_limits::{
     TrackLimitsConfig, TrackLimitsMonitor, TrackLimitsPenalty, TrackLimitsViolation,
 };
@@ -102,5 +114,5 @@ pub use track_surface::{
     BankingModel, BankingState, ElevationModel, ElevationState, SurfaceGripModifier,
     SurfaceProperties, SurfaceSample, TrackSurface, TrackSurfaceModel,
 };
-pub use weather::WeatherState;
 pub use user_stats::DriverStats;
+pub use weather::WeatherState;

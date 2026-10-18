@@ -1,10 +1,10 @@
 //! `<track>/data/data.json` — metadati della pista.
 //!
-//! Port di ksengine `adapters/assetto_corsa/TrackDataJsonLoader.h`. Come nel
-//! riferimento il reader è un **semplice string-scan** invece di un parser JSON
-//! completo: cerca `"chiave"` seguito da `:` e legge il primo valore scalare.
-//! È sufficiente perché questi file non annidano le chiavi che ci interessano,
-//! e non aggiunge dipendenze.
+//! Port of ksengine `adapters/assetto_corsa/TrackDataJsonLoader.h`. Like the
+//! reference, the reader is a **simple string-scan** instead of a full JSON parser:
+//! it searches for `"key"` followed by `:` and reads the first scalar value.
+//! It is sufficient because these files do not nest the keys we care about,
+//! and it adds no dependencies.
 //!
 //! Chiavi lette:
 //!

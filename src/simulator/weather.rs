@@ -213,8 +213,9 @@ impl WeatherSimulator {
         let dt = (dt * self.time_multiplier).clamp(1e-4, 1.0);
 
         if self.state.rain_intensity > 0.05 {
-            self.state.track_wetness =
-                (self.state.track_wetness + self.state.rain_intensity * 0.00015 * dt).clamp(0.0, 1.0);
+            self.state.track_wetness = (self.state.track_wetness
+                + self.state.rain_intensity * 0.00015 * dt)
+                .clamp(0.0, 1.0);
         } else {
             self.state.track_wetness = (self.state.track_wetness - 0.002 * dt).max(0.0);
         }
