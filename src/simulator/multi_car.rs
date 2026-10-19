@@ -523,7 +523,7 @@ impl Default for CarKinematics {
     }
 }
 
-/// Posizione/assetto di un'auto gestita dal manager.
+/// Position/attitude of a car managed by the manager.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CarPose {
     pub position: Vec3,

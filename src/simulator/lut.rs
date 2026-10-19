@@ -1,4 +1,4 @@
-//! Parser LUT Assetto Corsa: `x|y` per riga, commenti `;`.
+//! LUT parser: `x|y` per line, `;` comments.
 //! Supporta anche 2Dlut semplici (griglia).
 
 use std::fs;
@@ -79,7 +79,7 @@ impl Lut1D {
     }
 }
 
-/// Sintetizza una curva slip → moltiplicatore grip stile AC (picco ~1 a slip_peak, falloff dopo).
+/// Synthesizes a slip → grip-multiplier curve (peak ~1 at `slip_peak`, falloff after).
 pub fn synthesize_slip_curve(slip_peak: f32, falloff: f32, points: usize) -> Lut1D {
     let mut pts = Vec::with_capacity(points);
     let max_slip = slip_peak * 4.0;

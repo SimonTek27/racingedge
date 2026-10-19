@@ -1,8 +1,8 @@
-//! Loader completo data pack AC (data.json + .lut) — file originali non modificati.
+//! Full car data-pack loader (`data.json` + `.lut`) — original files unmodified.
 
-use crate::simulator::ac_import::AcImporter;
 use crate::simulator::aero::AeroConfig;
 use crate::simulator::brakes::BrakeConfig;
+use crate::simulator::car_import::CarImporter;
 use crate::simulator::drivetrain::DrivetrainConfig;
 use crate::simulator::electronics::ErsConfig;
 use crate::simulator::engine::EngineConfig;
@@ -222,8 +222,8 @@ impl CarPhysicsData {
         let candidates = [
             "assets/car_data/data.json",
             "car_data/data.json",
-            "/home/workdir/artifacts/acs_bevy/assets/car_data/data.json",
-            "/home/workdir/artifacts/ac_data/data/data.json",
+            "/home/workdir/artifacts/racingedge/assets/car_data/data.json",
+            "/home/workdir/artifacts/racingedge/data/data.json",
         ];
         for p in candidates {
             let path = Path::new(p);
@@ -244,16 +244,16 @@ impl CarPhysicsData {
                 }
             }
         }
-        // Ultimo tentativo: cartella AC con soli .ini
+        // Last attempt: car folder with only .ini files
         for p in [
             "assets/car_data",
-            "/home/workdir/artifacts/ac_data/data",
-            "/home/workdir/artifacts/ac_data",
+            "/home/workdir/artifacts/racingedge/data",
+            "/home/workdir/artifacts/racingedge",
         ] {
             if Path::new(p).is_dir() {
-                if let Ok(imp) = AcImporter::from_car_folder(p) {
+                if let Ok(imp) = CarImporter::from_car_folder(p) {
                     let d = imp.to_physics_data();
-                    eprintln!("[car_data] imported AC ini from {p}");
+                    eprintln!("[car_data] imported car ini from {p}");
                     return d;
                 }
             }
@@ -349,7 +349,7 @@ impl CarPhysicsData {
         // Suspension rates from DAMP (first = front tire damp) and RATE tire
         let damps = extract_all_f32(text, "DAMP");
         if let Some(v) = damps.first() {
-            data.susp_front.damper = v * 8.0; // scale AC tire damp toward wheel damper
+            data.susp_front.damper = v * 8.0; // scale tire damp toward wheel damper
         }
         if let Some(v) = damps.get(1) {
             data.susp_rear.damper = v * 8.0;

@@ -1,5 +1,5 @@
-//! `fast_lane.ai` — linea AI di Assetto Corsa (port di ksengine `AiFileReader.*`
-//! e `AiFileWriter.*`).
+//! `fast_lane.ai` — AI racing line (port of ksengine `AiFileReader.*`
+//! and `AiFileWriter.*`).
 //!
 //! Layout binario little-endian (intercambiabile con `AiSplineEditor` dell'editor Qt):
 //! ```text

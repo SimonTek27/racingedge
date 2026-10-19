@@ -1,4 +1,4 @@
-//! Cockpit instruments — stile Assetto Corsa
+//! Cockpit instruments — classic dashboard style
 //!
 //! **Digital instruments** (`digital_instruments.ini` → ITEM_n):
 //!   SPEED, RPM, GEAR, LAPTIME, BEST_LAP, FUEL, TC_LEVEL, ABS_LEVEL, …
@@ -185,8 +185,8 @@ pub enum AnalogInput {
     ErsCharge,
 }
 
-/// Ago analogico: mappa valore → angolo [rad] come in AC
-/// (OBJECT_NAME + MIN/MAX + angoli di fine corsa).
+/// Analog needle: maps a value → angle [rad] like the classic dashboard
+/// (OBJECT_NAME + MIN/MAX + end-of-travel angles).
 #[derive(Component, Clone, Debug)]
 pub struct AnalogInstrument {
     pub input: AnalogInput,

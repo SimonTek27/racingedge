@@ -1,4 +1,4 @@
-//! `.kn5` — contenitore di mesh di Assetto Corsa (port di ksengine `Kn5Reader.*`).
+//! `.kn5` — mesh container (port of ksengine `Kn5Reader.*`).
 //!
 //! Formato binario little-endian, verificato byte-per-byte su ~2770 file reali.
 //! The magic is the ASCII string `sc6969` (not `KN5\0`/`0x346E6B73` as assumed
@@ -44,7 +44,7 @@ pub const IDENTITY_MATRIX: [f32; MATRIX_FLOATS] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
-// Limiti speculari al riferimento Python validato sull'intero corpus AC.
+// Limits mirroring the reference Python validated on the whole `.kn5` corpus.
 const MAX_RECORDS: i32 = 100_000;
 const MAX_PROPERTIES: i32 = 10_000;
 const MAX_MAPPINGS: i32 = 10_000;

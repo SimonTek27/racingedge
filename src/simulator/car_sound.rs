@@ -6,7 +6,7 @@
 //!   - `docs/VEHICLE_AUDIO_HOOK.md`       (loadCarAudio / sound pack)
 //!
 //! Strategia (come ksengine, non come FMOD Studio API):
-//! 1. Carica metadata eventi AC (`event:/cars/<stem>/…`)
+//! 1. Carica metadata eventi auto (`event:/cars/<stem>/…`)
 //! 2. Se il `.bank` è presente → tenta estrazione sample / usa WAV in sfx/
 //! 3. Altrimenti `generate_synth_engine_layer` (come `generateSynthEngineLayer`)
 //! 4. Crossfade 8 layer int/ext su RPM + throttle
@@ -381,7 +381,7 @@ impl CarSoundBankMeta {
         vec![
             PathBuf::from("assets/sfx").join(&self.bank_file),
             PathBuf::from("/home/workdir/attachments").join(&self.bank_file),
-            PathBuf::from("/home/workdir/artifacts/acs_bevy/assets/sfx").join(&self.bank_file),
+            PathBuf::from("/home/workdir/artifacts/racingedge/assets/sfx").join(&self.bank_file),
         ]
     }
 }
@@ -649,7 +649,7 @@ impl CarSound {
         ]
     }
 
-    /// Event path AC standard (come KsCarAudioEngine::eventPath).
+    /// Standard engine event path (like KsCarAudioEngine::eventPath).
     pub fn engine_ext_event(&self) -> String {
         self.meta.event_path("engine_ext")
     }

@@ -1,6 +1,7 @@
 //! `<track>/data/surfaces.ini` — griglia di superfici della pista.
 //!
-//! Port di ksengine `adapters/assetto_corsa/AcSurfacesLoader`. Ogni sezione
+//! Port of ksengine's track surfaces loader (see
+//! `docs/KSENGINE_PORT_BACKLOG.md` for the source map). Ogni sezione
 //! `[SURFACE_n]` describes a surface; the section index is the index with
 //! cui la mesh della pista la referenzia.
 //!
@@ -20,7 +21,7 @@ use std::path::Path;
 
 use crate::editor::ini::Ini;
 
-/// Grip di default di AC per una superficie non dichiarata.
+/// Default grip for an undeclared surface.
 pub const DEFAULT_FRICTION: f32 = 0.94;
 /// Smorzamento verticale di default.
 pub const DEFAULT_DAMPING: f32 = 0.0;
@@ -48,7 +49,7 @@ pub struct SurfaceDef {
 }
 
 impl SurfaceDef {
-    /// Superficie con i default di AC e la chiave indicata.
+    /// A surface with the default values and the given key.
     pub fn new(key: impl Into<String>) -> Self {
         Self {
             key: key.into(),

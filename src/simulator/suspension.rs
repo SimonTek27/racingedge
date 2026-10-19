@@ -40,7 +40,7 @@ pub struct VerticalLoads {
 /// Carichi verticali statici + aero + trasferimento longitudinale grezzo.
 pub fn compute_loads(
     mass: f32,
-    cg_location: f32, // fraction toward rear (AC style ~0.47)
+    cg_location: f32, // fraction toward rear (typical ~0.47)
     downforce: f32,
     long_accel: f32,
     wheelbase: f32,

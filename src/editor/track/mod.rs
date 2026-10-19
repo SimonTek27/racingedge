@@ -1,14 +1,14 @@
-//! Track data editor in Assetto Corsa style.
+//! Track data editor.
 //!
-//! Port di ksengine `adapters/assetto_corsa/TrackDataJsonLoader` +
-//! `AcSurfacesLoader`: legge la cartella `data/` di una pista e ne espone i
-//! metadati e la griglia di superfici usata dalla fisica.
+//! Port of ksengine's track data/surfaces loaders (see
+//! `docs/KSENGINE_PORT_BACKLOG.md` for the source map): reads a track's `data/`
+//! folder and exposes its metadata and the surface grid used by the physics.
 //!
-//! * [`data`] — `data.json`: nome, lunghezza spline, larghezza.
-//! * [`surfaces`] — `surfaces.ini`: grip, smorzamento e sporco per superficie.
+//! * [`data`] — `data.json`: name, spline length, width.
+//! * [`surfaces`] — `surfaces.ini`: grip, damping and dirt per surface.
 //!
 //! Both loaders are **tolerant**: a missing file is not an error and every
-//! missing key falls back to Assetto Corsa defaults. [`Track::discover`]
+//! missing key falls back to the format's defaults. [`Track::discover`]
 //! returns `None` only when there is neither `data.json` nor
 //! `surfaces.ini` in the folder.
 //!

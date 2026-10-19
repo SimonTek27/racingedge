@@ -1,14 +1,14 @@
-//! Import Assetto Corsa → RacingEdge
+//! Import classic car folders → RacingEdge
 //!
-//! Legge cartelle auto AC classiche (`data/*.ini` + `.lut`) e le converte
-//! nello stesso schema JSON già usato da `car_data` (come il pack fornito).
+//! Reads classic car folders (`data/*.ini` + `.lut`) and converts them into the
+//! same JSON schema already used by `car_data` (like the bundled pack).
 //!
 //! Uso:
 //! ```ignore
-//! let data = AcImporter::from_car_folder("path/to/cars/ferrari_499p")?
+//! let data = CarImporter::from_car_folder("path/to/cars/ferrari_499p")?
 //!     .to_physics_data();
 //! // oppure scrivi JSON:
-//! AcImporter::from_car_folder(path)?.write_json("assets/car_data/data.json")?;
+//! CarImporter::from_car_folder(path)?.write_json("assets/car_data/data.json")?;
 //! ```
 
 use crate::simulator::car_data::{CarPhysicsData, ErsData, TireAxleData};
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Sezione INI: chiavi case-insensitive (AC usa KEY=VALUE).
+/// INI section: case-insensitive keys (the format uses KEY=VALUE).
 #[derive(Debug, Default, Clone)]
 pub struct IniSection {
     pub values: HashMap<String, String>,
@@ -37,7 +37,7 @@ impl IniSection {
     }
 }
 
-/// File INI AC intero.
+/// A whole car INI file.
 #[derive(Debug, Default, Clone)]
 pub struct IniFile {
     pub sections: HashMap<String, IniSection>,
@@ -95,21 +95,21 @@ impl IniFile {
 
 fn parse_f32_loose(s: &str) -> Option<f32> {
     let s = s.trim().trim_matches('"');
-    // AC sometimes uses comma decimals
+    // the format sometimes uses comma decimals
     let s = s.replace(',', ".");
     s.parse().ok()
 }
 
-/// Importatore cartella auto AC.
+/// Importer for a classic car folder.
 #[derive(Debug)]
-pub struct AcImporter {
+pub struct CarImporter {
     pub car_dir: PathBuf,
     pub data_dir: PathBuf,
     pub name: String,
     pub files: HashMap<String, IniFile>,
 }
 
-impl AcImporter {
+impl CarImporter {
     /// `car_dir` = cartella auto (`.../content/cars/ferrari_499p`)
     /// oppure direttamente la cartella `data/`.
     pub fn from_car_folder(car_dir: impl AsRef<Path>) -> Result<Self, String> {
@@ -123,7 +123,7 @@ impl AcImporter {
             car_dir.clone()
         } else {
             return Err(format!(
-                "cartella AC non riconosciuta: {} (serve data/ o *.ini)",
+                "unrecognized car folder: {} (expected data/ or *.ini)",
                 car_dir.display()
             ));
         };
@@ -149,7 +149,7 @@ impl AcImporter {
                     Ok(ini) => {
                         files.insert(stem, ini);
                     }
-                    Err(err) => eprintln!("[ac_import] skip {}: {err}", path.display()),
+                    Err(err) => eprintln!("[car_import] skip {}: {err}", path.display()),
                 }
             }
         }
@@ -163,7 +163,7 @@ impl AcImporter {
         }
 
         eprintln!(
-            "[ac_import] {} — {} file .ini da {}",
+            "[car_import] {} — {} file .ini da {}",
             name,
             files.len(),
             data_dir.display()
@@ -410,7 +410,7 @@ impl AcImporter {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         fs::write(out.as_ref(), json).map_err(|e| e.to_string())?;
-        eprintln!("[ac_import] wrote {}", out.as_ref().display());
+        eprintln!("[car_import] wrote {}", out.as_ref().display());
         Ok(())
     }
 
@@ -510,7 +510,7 @@ fn physics_to_json(d: &CarPhysicsData) -> String {
     format!(
         r#"{{
   "name": "{}",
-  "source": "assetto_corsa_import",
+  "source": "racingedge_car_import",
   "TOTALMASS": {},
   "WHEELBASE": {},
   "CG_LOCATION": {},
@@ -612,7 +612,8 @@ fn physics_to_json(d: &CarPhysicsData) -> String {
     )
 }
 
-/// Rileva se un path è pack JSON, cartella AC con ini, o data.json singolo.
+/// Detects whether a path is a JSON pack, a car folder with ini files, or a
+/// single `data.json`.
 pub fn load_car_auto(path: impl AsRef<Path>) -> Result<CarPhysicsData, String> {
     let path = path.as_ref();
     if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("json") {
@@ -625,8 +626,8 @@ pub fn load_car_auto(path: impl AsRef<Path>) -> Result<CarPhysicsData, String> {
         if path.join("data/data.json").exists() {
             return CarPhysicsData::load_from_json(path.join("data/data.json"));
         }
-        // AC classic
-        let importer = AcImporter::from_car_folder(path)?;
+        // classic car folder
+        let importer = CarImporter::from_car_folder(path)?;
         return Ok(importer.to_physics_data());
     }
     Err(format!("path non valido: {}", path.display()))

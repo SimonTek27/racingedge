@@ -7,9 +7,9 @@
 //!
 //! * [`telemetry`] — outgoing telemetry over UDP `:20777` and TCP `:20778`.
 
-pub mod ac_shared_memory;
 pub mod car_state_sync;
 pub mod control_api;
 pub mod discovery;
 pub mod matchmaking;
+pub mod shared_memory;
 pub mod telemetry;

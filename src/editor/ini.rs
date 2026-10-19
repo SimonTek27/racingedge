@@ -1,14 +1,13 @@
 //! Parser INI minimale con **ordine delle sezioni preservato**.
 //!
-//! Game content files (`surfaces.ini`, `setup.ini`, …)
-//! sono INI piatti in stile Assetto Corsa: sezioni `[NOME]`, coppie
-//! `chiave = valore`, commenti `;`. L'ordine conta — ad esempio in
-//! `surfaces.ini` l'indice della sezione è l'indice della superficie — quindi
-//! questo parser conserva l'ordine di inserimento invece di usare una
-//! `HashMap` come fa il reader delle auto.
+//! Game content files (`surfaces.ini`, `setup.ini`, …) are plain INI files:
+//! sections `[NAME]`, `key = value` pairs, `;` comments. Order matters — in
+//! `surfaces.ini` for instance the section index is the surface index — so this
+//! parser preserves insertion order instead of using a `HashMap` like the car
+//! reader does.
 //!
 //! * keys are compared **case-insensitively**
-//! * `parse_f32` accepts the decimal comma (`0,94`), which AC uses sometimes
+//! * `parse_f32` accepts the decimal comma (`0,94`), which the format uses sometimes
 //! * a repeated key in the same section wins the last occurrence
 //! * the BOM UTF-8 initial is ignored
 
@@ -164,7 +163,7 @@ impl Ini {
     }
 }
 
-/// Interpreta un numero in stile AC (`0.94`, `0,94`, `"0.94"`, `1e-3`).
+/// Parses a number in the format's style (`0.94`, `0,94`, `"0.94"`, `1e-3`).
 pub fn parse_f32(raw: &str) -> Option<f32> {
     let raw = raw.trim().trim_matches('"').trim();
     if raw.is_empty() {
@@ -175,7 +174,7 @@ pub fn parse_f32(raw: &str) -> Option<f32> {
         .or_else(|| raw.replace(',', ".").parse::<f32>().ok())
 }
 
-/// Interpreta un intero in stile AC, tollerando la virgola decimale.
+/// Parses an integer in the format's style, tolerating the decimal comma.
 pub fn parse_i32(raw: &str) -> Option<i32> {
     let raw = raw.trim().trim_matches('"').trim();
     raw.parse::<i32>()

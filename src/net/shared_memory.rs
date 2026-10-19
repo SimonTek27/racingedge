@@ -1,43 +1,44 @@
-//! Assetto Corsa shared memory publisher (port of ksengine
-//! `adapters/assetto_corsa/AcSharedMemory.h` and `AcSharedMemoryPublisher.h`).
+//! Shared-memory publisher for external telemetry apps (port of ksengine's
+//! shared-memory adapter; see `docs/KSENGINE_PORT_BACKLOG.md` for the source
+//! map).
 //!
-//! Third-party AC tools (Live Timers, SimTools, dashboards…) open three named
+//! Third-party telemetry tools (live timers, dashboards…) open three named
 //! shared-memory pages and read a fixed binary layout:
 //!
 //! * Windows: `Local\acpmf_physics`, `Local\acpmf_graphics`, `Local\acpmf_static`
 //! * POSIX:   `/acpmf_physics`,    `/acpmf_graphics`,    `/acpmf_static`
 //!
-//! `acs.exe` creates every mapping with a fixed size of 592 bytes (`0x250`) and
-//! maps exactly that, so we never create a mapping smaller than that — larger
-//! pages (our static page) keep their full size and readers mapping the 592-byte
-//! prefix stay compatible.
+//! The mapping names and the 592-byte floor are part of that external wire
+//! format and are kept verbatim so those tools keep working. Every mapping is
+//! created at least that big, so readers of the 592-byte prefix stay
+//! compatible, while larger pages (our static page) keep their full size.
 //!
 //! The publisher always keeps an in-process mirror, so behaviour is identical
 //! (and testable) even when no OS mapping can be created.
 //!
 //! ```
-//! use racingedge::net::ac_shared_memory::{AcLiveInput, AcSharedMemoryPublisher};
+//! use racingedge::net::shared_memory::{LiveInput, SharedMemoryPublisher};
 //!
-//! let mut publisher = AcSharedMemoryPublisher::new();
-//! publisher.publish(&AcLiveInput {
+//! let mut publisher = SharedMemoryPublisher::new();
+//! publisher.publish(&LiveInput {
 //!     throttle: 0.8,
 //!     gear: 3,
-//!     ..AcLiveInput::default()
+//!     ..LiveInput::default()
 //! });
 //! assert_eq!(publisher.physics().gas, 0.8);
 //! assert_eq!(publisher.physics().gear, 4);
 //! ```
 
-/// Every `acpmf_*` mapping is created at least this big (`0x250`), matching the
-/// fixed size `acs.exe` uses.
-pub const AC_SHM_MAPPING_BYTES: usize = 0x250;
+/// Every `acpmf_*` mapping is created at least this big (`0x250`), the floor the
+/// external tools expect.
+pub const SHM_MAPPING_BYTES: usize = 0x250;
 
-/// The mapping size for a page: AC's fixed 592-byte floor, or the page size when
+/// The mapping size for a page: the fixed 592-byte floor, or the page size when
 /// the page is larger.
 #[must_use]
-pub fn ac_shm_mapping_size(page_bytes: usize) -> usize {
-    if page_bytes < AC_SHM_MAPPING_BYTES {
-        AC_SHM_MAPPING_BYTES
+pub fn shm_mapping_size(page_bytes: usize) -> usize {
+    if page_bytes < SHM_MAPPING_BYTES {
+        SHM_MAPPING_BYTES
     } else {
         page_bytes
     }
@@ -235,7 +236,7 @@ mod platform {
 /// `SPageFilePhysics` — live, per-frame physics data.
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct AcPhysicsPage {
+pub struct PhysicsPage {
     pub packet_id: i32,
     pub gas: f32,
     pub brake: f32,
@@ -298,7 +299,7 @@ pub struct AcPhysicsPage {
     pub local_velocity: [f32; 3],
 }
 
-impl Default for AcPhysicsPage {
+impl Default for PhysicsPage {
     fn default() -> Self {
         // SAFETY: every field is a plain integer/float; the all-zero bit pattern
         // is a valid value for all of them.
@@ -314,7 +315,7 @@ impl Default for AcPhysicsPage {
 /// `SPageFileGraphics` — session/position/timing data.
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct AcGraphicsPage {
+pub struct GraphicsPage {
     pub packet_id: i32,
     pub status: i32,
     pub session: i32,
@@ -347,7 +348,7 @@ pub struct AcGraphicsPage {
     pub wind_direction: f32,
 }
 
-impl Default for AcGraphicsPage {
+impl Default for GraphicsPage {
     fn default() -> Self {
         // SAFETY: every field is a plain integer/float; zero is valid.
         let mut page: Self = unsafe { core::mem::zeroed() };
@@ -360,9 +361,9 @@ impl Default for AcGraphicsPage {
 /// `SPageFileStatic` — identity/config data, written once.
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct AcStaticPage {
+pub struct StaticPage {
     pub sm_version: [u16; 15],
-    pub ac_version: [u16; 15],
+    pub app_version: [u16; 15],
     pub number_of_sessions: i32,
     pub num_cars: i32,
     pub car_model: [u16; 33],
@@ -403,7 +404,7 @@ pub struct AcStaticPage {
     pub neutral_gear_is_coast_on: i32,
 }
 
-impl Default for AcStaticPage {
+impl Default for StaticPage {
     fn default() -> Self {
         // SAFETY: every field is a plain integer/float; zero is valid.
         let mut page: Self = unsafe { core::mem::zeroed() };
@@ -416,9 +417,9 @@ impl Default for AcStaticPage {
     }
 }
 
-/// Live snapshot fed to [`AcSharedMemoryPublisher::publish`].
+/// Live snapshot fed to [`SharedMemoryPublisher::publish`].
 #[derive(Debug, Clone)]
-pub struct AcLiveInput {
+pub struct LiveInput {
     pub throttle: f32,
     pub brake: f32,
     pub clutch: f32,
@@ -484,7 +485,7 @@ pub struct AcLiveInput {
     pub engine_seized: bool,
 }
 
-impl Default for AcLiveInput {
+impl Default for LiveInput {
     fn default() -> Self {
         Self {
             throttle: 0.0,
@@ -554,27 +555,33 @@ impl Default for AcLiveInput {
     }
 }
 
-/// Maps a ksengine `RaceFlag` code to AC's `AC_FLAG_TYPE`.
+/// Maps a `RaceFlag` code to the external flag code the format uses.
 ///
-/// AC has no green/safety-car code: green maps to `NO_FLAG` and the safety car
-/// to `YELLOW`; meatball maps to the penalty flag (closest match).
+/// The format has no green, red or white-and-black code, so those map to
+/// `FLAG_NONE`; the double yellow, the slippery-surface flag and the safety car
+/// all map to `FLAG_YELLOW`; the meatball maps to the penalty flag (closest
+/// match).
 #[must_use]
-pub fn ks_race_flag_to_ac_flag(race_flag: i32) -> i32 {
+pub fn race_flag_to_page_flag(race_flag: i32) -> i32 {
     match race_flag {
-        2 => 2, // Yellow     -> AC_YELLOW_FLAG
-        3 => 1, // Blue       -> AC_BLUE_FLAG
-        4 => 4, // White      -> AC_WHITE_FLAG
-        5 => 3, // Black      -> AC_BLACK_FLAG
-        6 => 5, // Checkered  -> AC_CHECKERED_FLAG
-        7 => 6, // Meatball   -> AC_PENALTY_FLAG
-        8 => 2, // SafetyCar  -> AC_YELLOW_FLAG
-        _ => 0, // None/Green -> AC_NO_FLAG
+        2 => 2,  // Yellow           -> FLAG_YELLOW
+        3 => 1,  // Blue             -> FLAG_BLUE
+        4 => 4,  // White            -> FLAG_WHITE
+        5 => 3,  // Black            -> FLAG_BLACK
+        6 => 5,  // Checkered        -> FLAG_CHECKERED
+        7 => 6,  // Meatball         -> FLAG_PENALTY
+        8 => 2,  // SafetyCar        -> FLAG_YELLOW
+        9 => 2,  // DoubleYellow     -> FLAG_YELLOW
+        10 => 2, // YellowRedStripes -> FLAG_YELLOW
+        11 => 0, // WhiteAndBlack    -> FLAG_NONE
+        12 => 0, // Red              -> FLAG_NONE
+        _ => 0,  // None/Green       -> FLAG_NONE
     }
 }
 
 /// Writes a `M:SS.mmm` time string into a fixed wide buffer, or `--` for a
-/// non-positive time (matching AC's formatting).
-pub fn format_ac_time(dst: &mut [u16], ms: i32) {
+/// non-positive time (matching the external format's formatting).
+pub fn format_telemetry_time(dst: &mut [u16], ms: i32) {
     if dst.len() < 3 {
         return;
     }
@@ -603,8 +610,8 @@ fn write_wide(dst: &mut [u16], src: &str) {
     }
 }
 
-/// Fills the physics page from a live snapshot (AC's `fillPhysics`).
-pub fn fill_physics(page: &mut AcPhysicsPage, input: &AcLiveInput) {
+/// Fills the physics page from a live snapshot (port of `fillPhysics`).
+pub fn fill_physics(page: &mut PhysicsPage, input: &LiveInput) {
     page.packet_id += 1;
     page.gas = input.throttle;
     page.brake = input.brake;
@@ -651,8 +658,8 @@ pub fn fill_physics(page: &mut AcPhysicsPage, input: &AcLiveInput) {
     page.car_damage.copy_from_slice(&input.car_damage);
 }
 
-/// Fills the graphics page from a live snapshot (AC's `fillGraphics`).
-pub fn fill_graphics(page: &mut AcGraphicsPage, input: &AcLiveInput) {
+/// Fills the graphics page from a live snapshot (port of `fillGraphics`).
+pub fn fill_graphics(page: &mut GraphicsPage, input: &LiveInput) {
     page.packet_id += 1;
     page.status = input.status;
     page.session = input.session_type;
@@ -672,16 +679,16 @@ pub fn fill_graphics(page: &mut AcGraphicsPage, input: &AcLiveInput) {
     page.distance_traveled = input.distance_traveled;
     page.car_coordinates = [input.car_x, input.car_y, input.car_z];
     page.flag = input.flag;
-    format_ac_time(&mut page.current_time, input.i_current_time_ms);
-    format_ac_time(&mut page.last_time, input.i_last_time_ms);
-    format_ac_time(&mut page.best_time, input.i_best_time_ms);
+    format_telemetry_time(&mut page.current_time, input.i_current_time_ms);
+    format_telemetry_time(&mut page.last_time, input.i_last_time_ms);
+    format_telemetry_time(&mut page.best_time, input.i_best_time_ms);
     write_wide(&mut page.tyre_compound, &input.tyre_compound);
 }
 
-/// Fills the static page from a live snapshot (AC's `fillStatic`).
-pub fn fill_static(page: &mut AcStaticPage, input: &AcLiveInput) {
+/// Fills the static page from a live snapshot (port of `fillStatic`).
+pub fn fill_static(page: &mut StaticPage, input: &LiveInput) {
     write_wide(&mut page.sm_version, "1.7");
-    write_wide(&mut page.ac_version, "ksim");
+    write_wide(&mut page.app_version, "ksim");
     write_wide(&mut page.car_model, &input.car_model);
     write_wide(&mut page.track, &input.track_name);
     write_wide(
@@ -700,21 +707,21 @@ pub fn fill_static(page: &mut AcStaticPage, input: &AcLiveInput) {
     page.track_spline_length = input.track_spline_length;
 }
 
-/// Publishes the three AC pages to named shared memory, with a soft in-process
+/// Publishes the three pages to named shared memory, with a soft in-process
 /// mirror when no OS mapping can be created.
-pub struct AcSharedMemoryPublisher {
+pub struct SharedMemoryPublisher {
     ok: bool,
     mapped: bool,
     static_filled: bool,
-    physics: AcPhysicsPage,
-    graphics: AcGraphicsPage,
-    static_page: AcStaticPage,
+    physics: PhysicsPage,
+    graphics: GraphicsPage,
+    static_page: StaticPage,
     phys_map: Option<platform::Mapping>,
     gfx_map: Option<platform::Mapping>,
     stat_map: Option<platform::Mapping>,
 }
 
-impl AcSharedMemoryPublisher {
+impl SharedMemoryPublisher {
     /// Creates a closed publisher (call [`open`](Self::open) to map the pages).
     #[must_use]
     pub fn new() -> Self {
@@ -722,16 +729,16 @@ impl AcSharedMemoryPublisher {
             ok: false,
             mapped: false,
             static_filled: false,
-            physics: AcPhysicsPage::default(),
-            graphics: AcGraphicsPage::default(),
-            static_page: AcStaticPage::default(),
+            physics: PhysicsPage::default(),
+            graphics: GraphicsPage::default(),
+            static_page: StaticPage::default(),
             phys_map: None,
             gfx_map: None,
             stat_map: None,
         }
     }
 
-    /// Opens the three AC pages. Returns `true` when the publisher is usable; a
+    /// Opens the three pages. Returns `true` when the publisher is usable; a
     /// failed mapping still leaves a working soft in-process mirror.
     pub fn open(&mut self) -> bool {
         self.open_named("acpmf_physics", "acpmf_graphics", "acpmf_static")
@@ -743,9 +750,9 @@ impl AcSharedMemoryPublisher {
         if self.ok {
             return true;
         }
-        let phys_bytes = ac_shm_mapping_size(core::mem::size_of::<AcPhysicsPage>());
-        let gfx_bytes = ac_shm_mapping_size(core::mem::size_of::<AcGraphicsPage>());
-        let stat_bytes = ac_shm_mapping_size(core::mem::size_of::<AcStaticPage>());
+        let phys_bytes = shm_mapping_size(core::mem::size_of::<PhysicsPage>());
+        let gfx_bytes = shm_mapping_size(core::mem::size_of::<GraphicsPage>());
+        let stat_bytes = shm_mapping_size(core::mem::size_of::<StaticPage>());
 
         self.phys_map = platform::Mapping::create(physics, phys_bytes);
         self.gfx_map = platform::Mapping::create(graphics, gfx_bytes);
@@ -774,7 +781,7 @@ impl AcSharedMemoryPublisher {
     }
 
     /// Writes the live snapshot to the pages (mirror always, mapping when open).
-    pub fn publish(&mut self, input: &AcLiveInput) {
+    pub fn publish(&mut self, input: &LiveInput) {
         if !self.ok {
             self.use_soft();
         }
@@ -811,19 +818,19 @@ impl AcSharedMemoryPublisher {
 
     /// The in-process mirror of the physics page.
     #[must_use]
-    pub fn physics(&self) -> &AcPhysicsPage {
+    pub fn physics(&self) -> &PhysicsPage {
         &self.physics
     }
 
     /// The in-process mirror of the graphics page.
     #[must_use]
-    pub fn graphics(&self) -> &AcGraphicsPage {
+    pub fn graphics(&self) -> &GraphicsPage {
         &self.graphics
     }
 
     /// The in-process mirror of the static page.
     #[must_use]
-    pub fn static_page(&self) -> &AcStaticPage {
+    pub fn static_page(&self) -> &StaticPage {
         &self.static_page
     }
 
@@ -835,16 +842,16 @@ impl AcSharedMemoryPublisher {
 
     /// Reads the physics page straight back from the OS mapping (tests).
     #[must_use]
-    pub fn read_mapped_physics(&self) -> Option<AcPhysicsPage> {
+    pub fn read_mapped_physics(&self) -> Option<PhysicsPage> {
         let map = self.phys_map.as_ref()?;
-        let mut page = AcPhysicsPage::default();
-        // SAFETY: the mapping holds at least size_of::<AcPhysicsPage>() bytes and
+        let mut page = PhysicsPage::default();
+        // SAFETY: the mapping holds at least size_of::<PhysicsPage>() bytes and
         // `page` is a valid, aligned destination of that size.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 map.as_ptr(),
                 core::ptr::addr_of_mut!(page).cast::<u8>(),
-                core::mem::size_of::<AcPhysicsPage>(),
+                core::mem::size_of::<PhysicsPage>(),
             );
         }
         Some(page)
@@ -868,7 +875,7 @@ impl AcSharedMemoryPublisher {
     }
 }
 
-impl Default for AcSharedMemoryPublisher {
+impl Default for SharedMemoryPublisher {
     fn default() -> Self {
         Self::new()
     }
@@ -894,46 +901,46 @@ mod tests {
 
     #[test]
     fn mapping_size_uses_592_byte_floor() {
-        assert_eq!(AC_SHM_MAPPING_BYTES, 0x250);
-        assert_eq!(ac_shm_mapping_size(0), 592);
-        assert_eq!(ac_shm_mapping_size(388), 592);
-        assert_eq!(ac_shm_mapping_size(592), 592);
-        assert_eq!(ac_shm_mapping_size(676), 676);
+        assert_eq!(SHM_MAPPING_BYTES, 0x250);
+        assert_eq!(shm_mapping_size(0), 592);
+        assert_eq!(shm_mapping_size(388), 592);
+        assert_eq!(shm_mapping_size(592), 592);
+        assert_eq!(shm_mapping_size(676), 676);
     }
 
     #[test]
     fn page_sizes_match_ac_layout() {
-        assert_eq!(size_of::<AcPhysicsPage>(), 580);
-        assert_eq!(size_of::<AcGraphicsPage>(), 296);
-        assert_eq!(size_of::<AcStaticPage>(), 676);
+        assert_eq!(size_of::<PhysicsPage>(), 580);
+        assert_eq!(size_of::<GraphicsPage>(), 296);
+        assert_eq!(size_of::<StaticPage>(), 676);
     }
 
     #[test]
     fn key_field_offsets_are_locked() {
-        assert_eq!(offset_of!(AcPhysicsPage, brake_bias), 564);
-        assert_eq!(offset_of!(AcPhysicsPage, tyre_contact_point), 420);
-        assert_eq!(offset_of!(AcGraphicsPage, completed_laps), 132);
-        assert_eq!(offset_of!(AcGraphicsPage, tyre_compound), 176);
-        assert_eq!(offset_of!(AcStaticPage, track), 134);
-        assert_eq!(offset_of!(AcStaticPage, track_configuration), 524);
+        assert_eq!(offset_of!(PhysicsPage, brake_bias), 564);
+        assert_eq!(offset_of!(PhysicsPage, tyre_contact_point), 420);
+        assert_eq!(offset_of!(GraphicsPage, completed_laps), 132);
+        assert_eq!(offset_of!(GraphicsPage, tyre_compound), 176);
+        assert_eq!(offset_of!(StaticPage, track), 134);
+        assert_eq!(offset_of!(StaticPage, track_configuration), 524);
     }
 
     #[test]
     fn page_defaults_match_ac() {
-        let physics = AcPhysicsPage::default();
+        let physics = PhysicsPage::default();
         assert_eq!(physics.air_density, 1.225);
         assert_eq!(physics.air_temp, 25.0);
         assert_eq!(physics.road_temp, 30.0);
         assert_eq!(physics.brake_bias, 0.55);
-        assert_eq!(AcGraphicsPage::default().replay_time_multiplier, 1.0);
-        assert_eq!(AcGraphicsPage::default().surface_grip, 1.0);
-        assert_eq!(AcStaticPage::default().num_cars, 1);
-        assert_eq!(AcStaticPage::default().sector_count, 3);
+        assert_eq!(GraphicsPage::default().replay_time_multiplier, 1.0);
+        assert_eq!(GraphicsPage::default().surface_grip, 1.0);
+        assert_eq!(StaticPage::default().num_cars, 1);
+        assert_eq!(StaticPage::default().sector_count, 3);
     }
 
     #[test]
     fn input_defaults_match_ac() {
-        let input = AcLiveInput::default();
+        let input = LiveInput::default();
         assert_eq!(input.gear, 1);
         assert_eq!(input.fuel, 50.0);
         assert_eq!(input.wheel_load, [3500.0; 4]);
@@ -946,10 +953,10 @@ mod tests {
 
     #[test]
     fn fill_physics_maps_gear_and_speed() {
-        let mut page = AcPhysicsPage::default();
+        let mut page = PhysicsPage::default();
         fill_physics(
             &mut page,
-            &AcLiveInput {
+            &LiveInput {
                 throttle: 0.75,
                 speed_ms: 25.0,
                 gear: 3,
@@ -965,7 +972,7 @@ mod tests {
 
         fill_physics(
             &mut page,
-            &AcLiveInput {
+            &LiveInput {
                 gear: 0,
                 ..Default::default()
             },
@@ -973,7 +980,7 @@ mod tests {
         assert_eq!(page.gear, 1);
         fill_physics(
             &mut page,
-            &AcLiveInput {
+            &LiveInput {
                 gear: -1,
                 ..Default::default()
             },
@@ -984,10 +991,10 @@ mod tests {
 
     #[test]
     fn fill_graphics_formats_times_and_compound() {
-        let mut page = AcGraphicsPage::default();
+        let mut page = GraphicsPage::default();
         fill_graphics(
             &mut page,
-            &AcLiveInput {
+            &LiveInput {
                 i_current_time_ms: 92_413,
                 i_best_time_ms: 60_000,
                 completed_laps: 4,
@@ -1005,10 +1012,10 @@ mod tests {
 
     #[test]
     fn fill_static_sets_identity_and_defaults_driver() {
-        let mut page = AcStaticPage::default();
+        let mut page = StaticPage::default();
         fill_static(
             &mut page,
-            &AcLiveInput {
+            &LiveInput {
                 car_model: "ks_gt3".to_string(),
                 track_name: "spa".to_string(),
                 max_rpm: 9000,
@@ -1018,7 +1025,7 @@ mod tests {
             },
         );
         assert_eq!(wide_to_string(&page.sm_version), "1.7");
-        assert_eq!(wide_to_string(&page.ac_version), "ksim");
+        assert_eq!(wide_to_string(&page.app_version), "ksim");
         assert_eq!(wide_to_string(&page.car_model), "ks_gt3");
         assert_eq!(wide_to_string(&page.track), "spa");
         assert_eq!(wide_to_string(&page.player_name), "Driver");
@@ -1031,33 +1038,37 @@ mod tests {
     #[test]
     fn format_time_handles_invalid_and_pads() {
         let mut buf = [1u16; 15];
-        format_ac_time(&mut buf, 0);
+        format_telemetry_time(&mut buf, 0);
         assert_eq!(wide_to_string(&buf), "--");
-        format_ac_time(&mut buf, -5);
+        format_telemetry_time(&mut buf, -5);
         assert_eq!(wide_to_string(&buf), "--");
-        format_ac_time(&mut buf, 5_900);
+        format_telemetry_time(&mut buf, 5_900);
         assert_eq!(wide_to_string(&buf), "0:05.900");
-        format_ac_time(&mut buf, 3_725_001);
+        format_telemetry_time(&mut buf, 3_725_001);
         assert_eq!(wide_to_string(&buf), "62:05.001");
     }
 
     #[test]
     fn race_flag_mapping_table() {
-        assert_eq!(ks_race_flag_to_ac_flag(0), 0);
-        assert_eq!(ks_race_flag_to_ac_flag(1), 0);
-        assert_eq!(ks_race_flag_to_ac_flag(2), 2);
-        assert_eq!(ks_race_flag_to_ac_flag(3), 1);
-        assert_eq!(ks_race_flag_to_ac_flag(4), 4);
-        assert_eq!(ks_race_flag_to_ac_flag(5), 3);
-        assert_eq!(ks_race_flag_to_ac_flag(6), 5);
-        assert_eq!(ks_race_flag_to_ac_flag(7), 6);
-        assert_eq!(ks_race_flag_to_ac_flag(8), 2);
+        assert_eq!(race_flag_to_page_flag(0), 0);
+        assert_eq!(race_flag_to_page_flag(1), 0);
+        assert_eq!(race_flag_to_page_flag(2), 2);
+        assert_eq!(race_flag_to_page_flag(3), 1);
+        assert_eq!(race_flag_to_page_flag(4), 4);
+        assert_eq!(race_flag_to_page_flag(5), 3);
+        assert_eq!(race_flag_to_page_flag(6), 5);
+        assert_eq!(race_flag_to_page_flag(7), 6);
+        assert_eq!(race_flag_to_page_flag(8), 2);
+        assert_eq!(race_flag_to_page_flag(9), 2);
+        assert_eq!(race_flag_to_page_flag(10), 2);
+        assert_eq!(race_flag_to_page_flag(11), 0);
+        assert_eq!(race_flag_to_page_flag(12), 0);
     }
 
     #[test]
     fn publish_without_open_uses_soft_mirror() {
-        let mut publisher = AcSharedMemoryPublisher::new();
-        publisher.publish(&AcLiveInput {
+        let mut publisher = SharedMemoryPublisher::new();
+        publisher.publish(&LiveInput {
             throttle: 0.5,
             gear: 2,
             ..Default::default()
@@ -1071,13 +1082,13 @@ mod tests {
 
     #[test]
     fn static_page_refreshes_only_dynamic_fields() {
-        let mut publisher = AcSharedMemoryPublisher::new();
-        publisher.publish(&AcLiveInput {
+        let mut publisher = SharedMemoryPublisher::new();
+        publisher.publish(&LiveInput {
             max_rpm: 8000,
             car_model: "a".to_string(),
             ..Default::default()
         });
-        publisher.publish(&AcLiveInput {
+        publisher.publish(&LiveInput {
             max_rpm: 9500,
             car_model: "b".to_string(),
             ..Default::default()
@@ -1086,7 +1097,7 @@ mod tests {
         assert_eq!(wide_to_string(&publisher.static_page().car_model), "a");
 
         publisher.invalidate_static();
-        publisher.publish(&AcLiveInput {
+        publisher.publish(&LiveInput {
             car_model: "c".to_string(),
             ..Default::default()
         });
@@ -1095,7 +1106,7 @@ mod tests {
 
     #[test]
     fn mapped_publisher_round_trips_physics_page() {
-        let mut publisher = AcSharedMemoryPublisher::new();
+        let mut publisher = SharedMemoryPublisher::new();
         assert!(publisher.open_named(
             &unique_name("physics"),
             &unique_name("graphics"),
@@ -1103,7 +1114,7 @@ mod tests {
         ));
         assert!(publisher.is_mapped());
 
-        publisher.publish(&AcLiveInput {
+        publisher.publish(&LiveInput {
             throttle: 0.42,
             brake: 0.17,
             speed_ms: 60.0,

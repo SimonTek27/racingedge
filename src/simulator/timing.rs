@@ -4,7 +4,7 @@
 //!
 //! [`LapTimer`] mirrors the event-driven `phys_LapTimer`: the caller reports
 //! completed sectors and laps and the timer keeps the running lap, the best lap
-//! and the history. [`LapSectorTimer`] is the AC-style timer that derives the
+//! and the history. [`LapSectorTimer`] is the spline-based timer that derives the
 //! sector boundaries and the start/finish crossing from the normalized spline
 //! position, so it works straight from a physics loop.
 //!
@@ -163,7 +163,7 @@ impl LapTimer {
     }
 }
 
-/// AC-style lap/sector timer (port of `LapSectorTimer`).
+/// Spline-based lap/sector timer (port of `LapSectorTimer`).
 ///
 /// Sector splits are normalized spline positions in `[0, 1)`. A lap is counted
 /// when the spline wraps from `> 0.85` to `< 0.15`.

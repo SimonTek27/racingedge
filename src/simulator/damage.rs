@@ -1682,7 +1682,7 @@ pub fn sample_mechanical_effects(dmg: &DamageSystem) -> MechEffectMultipliers {
 /// Snapshot piatto dello stato danni (port di `DamageTelemSample`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DamageTelemSample {
-    /// Danno frazionario AC-style: F R L R complessivo.
+    /// Fractional damage: F R L R overall.
     pub car_damage: [f32; 5],
     /// Danno complessivo, `0..=1`.
     pub overall: f32,

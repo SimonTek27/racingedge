@@ -1,6 +1,5 @@
 //! RacingEdge — runtime simulatore (fisica, cockpit, sessione).
 
-pub mod ac_import;
 pub mod aero;
 pub mod aero_draft;
 pub mod audio3d;
@@ -8,6 +7,7 @@ pub mod brake_thermal;
 pub mod brakes;
 pub mod camera;
 pub mod car_data;
+pub mod car_import;
 pub mod car_sound;
 pub mod cockpit;
 pub mod damage;
@@ -43,7 +43,6 @@ pub mod track_surface;
 pub mod user_stats;
 pub mod weather;
 
-pub use ac_import::{load_car_auto, AcImporter};
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
 pub use audio3d::{bearing_pan, distance_gain, doppler_factor, CarEventVolumes, OtherCarVoice};
 pub use brake_thermal::{
@@ -52,6 +51,7 @@ pub use brake_thermal::{
 };
 pub use camera::{CameraController, CameraMode};
 pub use car_data::CarPhysicsData;
+pub use car_import::{load_car_auto, CarImporter};
 pub use car_sound::CarSoundPlugin;
 pub use cockpit::{CockpitPlugin, CockpitTelemetry};
 pub use damage::{

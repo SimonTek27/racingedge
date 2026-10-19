@@ -532,7 +532,7 @@ pub fn ensure_default_rebank() -> PathBuf {
         return path;
     }
     // absolute fallback for sandbox
-    let abs = PathBuf::from("/home/workdir/artifacts/acs_bevy").join(&path);
+    let abs = PathBuf::from("/home/workdir/artifacts/racingedge").join(&path);
     if abs.join("manifest.json").exists() {
         return abs;
     }
