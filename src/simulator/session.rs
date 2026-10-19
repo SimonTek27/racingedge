@@ -126,28 +126,44 @@ pub fn defaults_for_mode(mode: GameSessionMode) -> SessionStartParams {
 }
 
 /// Race flag (port of `RaceFlag`).
+///
+/// Meanings follow the standard motorsport flag rules. The numeric codes keep
+/// the values the network/telemetry bridge already relies on; the flags added
+/// later are appended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RaceFlag {
     /// No flag shown.
     #[default]
     None = 0,
-    /// Track clear.
+    /// The danger is over and the race resumes as normal.
     Green = 1,
-    /// Caution.
+    /// Hazard nearby: slow down and no overtaking.
     Yellow = 2,
-    /// A faster car is lapping you.
+    /// A car is about to be lapped (or already lapped) or must give way; three
+    /// ignored blue flags earn a penalty.
     Blue = 3,
-    /// Last lap.
+    /// Final lap (or a slow car on track).
     White = 4,
-    /// Black flag (penalty).
+    /// Disqualification; the driver's number is displayed.
     Black = 5,
-    /// Race over.
+    /// End of the race (black-and-white chequered flag).
     Checkered = 6,
-    /// Mechanical problem (black/orange).
+    /// Black with an orange circle: a car with a technical problem that may
+    /// endanger other drivers.
     Meatball = 7,
     /// Safety car deployed.
     SafetyCar = 8,
+    /// Hazard right where the flags are shown: slow down, no overtaking, and be
+    /// prepared to deviate from the racing line.
+    DoubleYellow = 9,
+    /// Yellow with red stripes: slippery track surface, slow down.
+    YellowRedStripes = 10,
+    /// White and black: warning that the driver will be penalised for the next
+    /// offence.
+    WhiteAndBlack = 11,
+    /// The session is suspended; during a race drivers must return to the pits.
+    Red = 12,
 }
 
 /// Race session type (port of `SessionType`).
@@ -184,6 +200,8 @@ pub enum SessionPhase {
     Checkered = 5,
     /// Session over.
     Finished = 6,
+    /// Session suspended (red flag).
+    Red = 7,
 }
 
 /// Penalty kind (port of `PenaltyType`).
@@ -308,7 +326,10 @@ impl RaceSession {
     pub fn set_flag(&mut self, flag: RaceFlag) {
         self.state.flag = flag;
         match flag {
-            RaceFlag::Yellow => self.state.phase = SessionPhase::Yellow,
+            RaceFlag::Yellow | RaceFlag::DoubleYellow | RaceFlag::YellowRedStripes => {
+                self.state.phase = SessionPhase::Yellow;
+            }
+            RaceFlag::Red => self.state.phase = SessionPhase::Red,
             RaceFlag::SafetyCar => self.state.phase = SessionPhase::SafetyCar,
             RaceFlag::Checkered => self.state.phase = SessionPhase::Checkered,
             RaceFlag::Green if self.state.phase != SessionPhase::Finished => {
@@ -465,9 +486,42 @@ mod tests {
         let mut session = RaceSession::new();
         session.set_flag(RaceFlag::Yellow);
         assert_eq!(session.state().phase, SessionPhase::Yellow);
+        session.set_flag(RaceFlag::DoubleYellow);
+        assert_eq!(session.state().phase, SessionPhase::Yellow);
+        session.set_flag(RaceFlag::YellowRedStripes);
+        assert_eq!(session.state().phase, SessionPhase::Yellow);
         session.set_flag(RaceFlag::SafetyCar);
         assert_eq!(session.state().phase, SessionPhase::SafetyCar);
         session.set_flag(RaceFlag::Green);
+        assert_eq!(session.state().phase, SessionPhase::Green);
+    }
+
+    #[test]
+    fn red_flag_suspends_then_green_resumes() {
+        let mut session = RaceSession::new();
+        session.start_green();
+        assert!(session.is_driving_allowed());
+        session.set_flag(RaceFlag::Red);
+        assert_eq!(session.state().phase, SessionPhase::Red);
+        assert_eq!(session.state().flag, RaceFlag::Red);
+        assert!(
+            !session.is_driving_allowed(),
+            "return to the pits under red"
+        );
+        session.set_flag(RaceFlag::Green);
+        assert_eq!(session.state().phase, SessionPhase::Green);
+        assert!(session.is_driving_allowed());
+    }
+
+    #[test]
+    fn warning_flags_do_not_change_phase() {
+        let mut session = RaceSession::new();
+        session.start_green();
+        session.set_flag(RaceFlag::WhiteAndBlack);
+        assert_eq!(session.state().flag, RaceFlag::WhiteAndBlack);
+        assert_eq!(session.state().phase, SessionPhase::Green);
+        assert!(session.is_driving_allowed());
+        session.set_flag(RaceFlag::Blue);
         assert_eq!(session.state().phase, SessionPhase::Green);
     }
 
