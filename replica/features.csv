@@ -1,0 +1,40 @@
+feature,area,priority,original,clone,notes
+Read FSB5 banks - header sample headers chunks name table,container,must,yes,yes,src/fsb.rs; RaMOD README "Parse"
+Write FSB5 banks from WAV with loop points,container,must,yes,yes,src/fsb_write.rs Fsb5Builder
+Edit banks preserving untouched metadata byte-for-byte,container,must,yes,yes,BankEditor; self-verifying writer
+PCM8/16/24/32 and PCMFLOAT samples,codecs,must,yes,yes,src/fsb.rs SoundFormat
+Vorbis sample to playable Ogg with re-synthesised headers and CRC-correct pages,codecs,must,yes,yes,src/vorbis.rs build_ogg
+Import any Ogg Vorbis into an FSB5 VORBIS sample,codecs,must,yes,yes,src/vorbis.rs import_ogg_to_bank
+PCM to Vorbis encode without a vendor DLL,codecs,must,yes,partial,feature encoder-rust via rusty_vorbis; encode quality vs the reference encoder still unverified
+Other codecs (XMA ADPCM CELT AT9 MPEG),codecs,should,yes,no,ROADMAP #10 graceful pass-through not done
+Hierarchical mixer Master to Group to Bus to Channel,mixer,must,yes,yes,runtime/src/mixer.rs - bus tree with parents sends inserts meters mute solo
+Voice management with virtual voices,mixer,must,yes,yes,runtime/src/voice.rs - VoiceState plus steal_lowest by priority and audibility
+Streaming playback for long music,mixer,should,yes,partial,runtime/src/buffer.rs PcmBuffer and BufferHandle exist; disk streaming unverified
+DSP node graph (gain pan EQ high/low pass compressor reverb),dsp,must,yes,yes,runtime/src/dsp.rs InsertEffect gain lowpass highpass compressor sidechain reverb
+3D spatialised emitters with attenuation curves,spatial,must,yes,yes,runtime/src/spatial.rs Attributes3d plus Attenuation
+Doppler from relative velocity,spatial,should,yes,yes,runtime/src/spatial.rs doppler_pitch
+Occlusion / obstruction,spatial,could,yes,no,ROADMAP #23 - no occlusion path in runtime/src
+Named parameters with automation,events,must,yes,yes,runtime/src/parameter.rs ParameterRegistry plus automation.rs AutomationCurve and Keyframe
+Event system one-shot loop multi-instrument randomisation,events,must,yes,yes,runtime/src/event.rs EventDescription and EventInstance; designer.rs InstrumentDef and InstrumentKind
+Snapshots (save/restore mixer state),events,could,yes,yes,runtime/src/mixer.rs Snapshot and SnapshotPlayer
+Profiling hooks (CPU time active voices bus levels),diagnostics,should,yes,yes,runtime/src/profiler.rs ProfilerSession plus SpectrumAnalyzer and BusMeterInfo
+Live update from editor into a running game,authoring,should,yes,yes,runtime/src/live_update.rs and docs/RENZORA.md port 17420
+Event designer with multi-track timeline and automation,authoring,must,yes,partial,runtime/src/designer.rs has TimelineTrack and TransitionMarker; the editor crate scope is unverified
+Interactive waveform with zoom and selection,editor,must,yes,partial,waveform/src/view.rs Viewport does cursor-anchored zoom + pan + frame<->px hit-testing + zoom-to-selection (8 tests) and editor/src/waveform_panel.rs wires ctrl+wheel zoom / wheel pan / drag-select through it; the editor crate itself does not build (34 pre-existing errors in audio_bridge / project / event_editor / main) so the UI is type-checked but not run
+Non-destructive cut copy paste silence reverse,editor,must,yes,yes,waveform/src/lib.rs cut/copy/paste/silence/reverse over Selection with undo+redo; 5 tests cover undo; redo; redo invalidation and interleaved channels
+Unlimited undo / redo,editor,should,yes,partial,waveform/src/history.rs UndoStack has undo and redo with region and full-buffer commands plus redo invalidation; depth capped at new(max) default 64
+Spectrogram / spectral view,editor,should,yes,partial,runtime/src/profiler.rs SpectrumAnalyzer is analysis only; no editor view
+Core effects (EQ compressor limiter normalise fade pitch time-stretch),editor,must,yes,yes,waveform/src/effects.rs: RBJ peaking EQ biquads; stereo-linked compressor; ceiling limiter; Hann overlap-add time-stretch; pitch via stretch+resample; 7 new tests
+Restoration (noise reduction de-click de-pop),editor,should,yes,no,ROADMAP #33 - de-click and spectral restoration not implemented
+Batch processing (folder to effect chain to export),editor,could,yes,no,ROADMAP #35
+Cue points regions markers,editor,could,yes,partial,designer LoopRegion and TransitionMarker are authored data not an editor marker UI
+Bevy plugin crate,integration,must,yes,yes,workspace member bevy_ramod
+AssetLoader for banks,integration,should,yes,yes,bevy_ramod/src/assets.rs impl AssetLoader + TypePath — verified compiling on Bevy 0.20 (cargo check --all-targets)
+Idiomatic ECS components (emitter listener event instance bus),integration,should,yes,yes,bevy_ramod/src/components.rs AudioListener SpatialAudioBundle PlayOnSpawn
+Transform to spatial sync (auto positioning),integration,should,yes,yes,sync_listener/sync_emitters_3d drive Runtime::set_listener/set_instance_3d; per-voice 3D gain + Doppler applied in sync_event_spatial_gains — compiles; runtime behaviour unverified
+Renzora backend adapter,integration,must,yes,yes,bevy_ramod/src/renzora_backend.rs plus docs/RENZORA.md glue
+Core library with no external crates,integration,must,yes,partial,default features pull rusty_vorbis and lewton; the container layer itself is std-only
+WASM / web target validated,integration,could,yes,no,listed as follow-up
+Published on crates.io,distribution,should,yes,no,ROADMAP #7
+Console / proprietary platform SDK support,distribution,could,yes,skip,licence-gated vendor SDKs - not cloneable and not in scope
+FMOD / Wwise authoring UI look and content,authoring,could,yes,skip,their trade dress and bundled content - clean-room rule applies
