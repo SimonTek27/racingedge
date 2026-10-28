@@ -180,3 +180,37 @@ and its exported types (`ProfilerSnapshot`, `BusInsertInfo`, `FxPreset`) are gon
 `path`, `add_asset_file`, `add_track`, `add_instrument`; `TrackEntry::new` is missing and
 `PlaylistEntry` has no `PartialEq`. So the zoom work is type-checked but **not runnable**, which is
 why must-have 15 stays `partial` in the matrix rather than being promoted on unit tests alone.
+
+## Publishing the repairs (and why it is not pushed yet)
+
+The repairs were applied to a **clean checkout of RaMOD `main`**, not just the working clone:
+
+```
+git worktree at f941b56  ->  git am replica/ramod-repair.patch  ->  18436a2
+```
+
+`replica/ramod-repair.patch` is a `git format-patch` export, so `git am` lands it as one signed-off
+commit with its message intact instead of a bare diff. It was re-applied to a second pristine
+worktree to confirm the round trip.
+
+| Check in the clean checkout (`f941b56` + patch) | Result |
+| --- | --- |
+| `git am replica/ramod-repair.patch` | clean, commit `18436a2` |
+| `cargo test -p ramod --lib` | 47 passed |
+| `cargo test -p ramod_waveform --lib` | 27 passed |
+| `cargo test -p ramod_runtime --lib --no-default-features` | 6 passed (null backend) |
+
+**The push is blocked by credentials, not by the code.** This workspace's GitHub credential is
+scoped to the connected repository (`racingedge`). `git push` to `SimonTek27/RaMOD` from the clone
+fails with `fatal: could not read Username for 'https://github.com'`, and asking for a token to
+paste in is not something this workflow should do.
+
+To land it, either connect `SimonTek27/RaMOD` as the repository for a chat and ask for the push
+again, or from a local RaMOD clone that is already on `main` at `f941b56`:
+
+```
+git am /path/to/ramod-repair.patch
+git push origin HEAD:refs/heads/fix/restore-build-and-effects
+```
+
+`replica/ramod-fixes.patch` remains as the plain-diff form (verified earlier with `git apply`).

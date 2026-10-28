@@ -1,0 +1,4829 @@
+From 18436a278f44abca2656bcef4e6a5a07d1b4746e Mon Sep 17 00:00:00 2001
+From: Simone Rizzo <35865705+SimonTek27@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 11:16:39 +0000
+Subject: [PATCH] fix: restore the build and add a real waveform effect chain
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RaMOD main did not compile: runtime_core_b.rs was an 18-byte placeholder whose
+recovery blobs were corrupt, an impl cannot span two include! files, live_update
+had three malformed raw strings, and the crate was still written against Bevy
+0.19 while the tree targets 0.20.
+
+Rebuild the lost Runtime methods against the real EventSystem/VoicePool/Mixer
+APIs, give OutputBackend the Send + Sync a Bevy Resource requires, decode the
+waveform importer's ten sample formats through a concrete helper (symphonia's
+Sample trait is not nameable), and move the Renzora plugin onto the local crate.
+
+The waveform editor gains a command-based undo/redo history with region-scoped
+in-place edits, RBJ peaking EQ, a stereo-linked compressor, a ceiling limiter,
+Hann overlap-add time-stretch and pitch-shift, plus a Viewport with
+cursor-anchored zoom, pan and frame/pixel hit-testing.
+
+Checked: ramod 47 tests, ramod_waveform 27 tests, ramod_runtime 6 tests with the
+null backend (this container has no libasound, so cpal cannot link).
+
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>
+---
+ bevy_ramod/Cargo.toml              |    7 +-
+ bevy_ramod/examples/basic.rs       |    3 +-
+ bevy_ramod/examples/live_update.rs |    3 +-
+ bevy_ramod/examples/load_bank.rs   |    3 +-
+ bevy_ramod/examples/load_fsb.rs    |    5 +-
+ bevy_ramod/src/assets.rs           |    4 +-
+ bevy_ramod/src/plugin.rs           |   32 +-
+ bevy_ramod/src/renzora.rs          |    6 +-
+ editor/src/waveform_panel.rs       |  375 +++++++++--
+ recovery/fsb.rs                    | 1001 +++++++++++++++++++++++++++
+ renzora_plugin/Cargo.toml          |    6 +-
+ runtime/src/backend.rs             |    8 +-
+ runtime/src/bank.rs                |    6 +
+ runtime/src/live_update.rs         |    6 +-
+ runtime/src/mixer.rs               |    2 +-
+ runtime/src/profiler.rs            |    3 +-
+ runtime/src/runtime_core_a.rs      |    5 +-
+ runtime/src/runtime_core_b.rs      |  334 ++++++++-
+ src/fsb.rs                         | 1012 +++++++++++++++++++++++++++-
+ src/vorbis.rs                      |    4 +-
+ waveform/src/effects.rs            |  270 +++++++-
+ waveform/src/export.rs             |    2 +-
+ waveform/src/history.rs            |  129 +++-
+ waveform/src/import.rs             |   81 ++-
+ waveform/src/lib.rs                |  476 ++++++++++++-
+ waveform/src/view.rs               |  299 +++++++-
+ 26 files changed, 3889 insertions(+), 193 deletions(-)
+ create mode 100644 recovery/fsb.rs
+
+diff --git a/bevy_ramod/Cargo.toml b/bevy_ramod/Cargo.toml
+index 902e21a..6435806 100644
+--- a/bevy_ramod/Cargo.toml
++++ b/bevy_ramod/Cargo.toml
+@@ -2,7 +2,7 @@
+ name = "bevy_ramod"
+ version = "0.1.0"
+ edition = "2021"
+-description = "Bevy integration for RaMOD — open-source FMOD-class audio (Bevy 0.19)"
++description = "Bevy integration for RaMOD — open-source FMOD-class audio (Bevy 0.20)"
+ license.workspace = true
+ repository.workspace = true
+ publish = false
+@@ -12,11 +12,11 @@ rust-version = "1.85"
+ default = []
+ # Renzora Engine integration: exposes adapter hooks and docs for using
+ # bevy_ramod as a first-class audio path inside https://github.com/renzora/engine
+-# (Bevy 0.19 aligned). Does not pull the full engine; see docs/RENZORA.md.
++# (Bevy 0.20 aligned). Does not pull the full engine; see docs/RENZORA.md.
+ renzora = []
+ 
+ [dependencies]
+-bevy = { version = "0.19", default-features = false, features = [
++bevy = { version = "0.20", default-features = false, features = [
+     "bevy_asset",
+     "bevy_render",
+     "bevy_core_pipeline",
+@@ -28,6 +28,7 @@ bevy = { version = "0.19", default-features = false, features = [
+ ramod = { path = "..", default-features = true, features = ["decoder-rust"] }
+ ramod_runtime = { path = "../runtime", default-features = false, features = ["backend-cpal", "live-update"] }
+ ramod_waveform = { path = "../waveform" }
++log = "0.4"
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ thiserror = "2"
+diff --git a/bevy_ramod/examples/basic.rs b/bevy_ramod/examples/basic.rs
+index 1c8297a..b4f8512 100644
+--- a/bevy_ramod/examples/basic.rs
++++ b/bevy_ramod/examples/basic.rs
+@@ -6,6 +6,7 @@
+ 
+ use bevy::prelude::*;
+ use bevy_ramod::prelude::*;
++use bevy::prelude::Vec3;
+ 
+ fn main() {
+     App::new()
+@@ -37,5 +38,5 @@ fn setup(mut commands: Commands, mut audio: ResMut<RamodAudio>) {
+         PlayOnSpawn,
+     ));
+ 
+-    bevy::log::info!("bevy_ramod: playing event:/sfx/beep");
++    log::info!("bevy_ramod: playing event:/sfx/beep");
+ }
+diff --git a/bevy_ramod/examples/live_update.rs b/bevy_ramod/examples/live_update.rs
+index 7faa6d3..cf8777c 100644
+--- a/bevy_ramod/examples/live_update.rs
++++ b/bevy_ramod/examples/live_update.rs
+@@ -8,6 +8,7 @@
+ 
+ use bevy::prelude::*;
+ use bevy_ramod::prelude::*;
++use bevy::prelude::Vec3;
+ 
+ fn main() {
+     App::new()
+@@ -41,5 +42,5 @@ fn setup(mut commands: Commands, mut audio: ResMut<RamodAudio>) {
+         AudioParameter::new("Intensity", 1.0),
+     ));
+ 
+-    bevy::log::info!("Live Update listening — connect editor to push Intensity");
++    log::info!("Live Update listening — connect editor to push Intensity");
+ }
+diff --git a/bevy_ramod/examples/load_bank.rs b/bevy_ramod/examples/load_bank.rs
+index 6b7d8f0..1f58f5e 100644
+--- a/bevy_ramod/examples/load_bank.rs
++++ b/bevy_ramod/examples/load_bank.rs
+@@ -8,6 +8,7 @@ use std::path::PathBuf;
+ 
+ use bevy::prelude::*;
+ use bevy_ramod::prelude::*;
++use bevy::prelude::Vec3;
+ 
+ fn main() {
+     App::new()
+@@ -92,5 +93,5 @@ fn spawn_emitter_when_ready(
+         PlayOnSpawn,
+     ));
+     ready.spawned = true;
+-    bevy::log::info!("Playing {}", ready.event);
++    log::info!("Playing {}", ready.event);
+ }
+diff --git a/bevy_ramod/examples/load_fsb.rs b/bevy_ramod/examples/load_fsb.rs
+index 9947fb3..59256aa 100644
+--- a/bevy_ramod/examples/load_fsb.rs
++++ b/bevy_ramod/examples/load_fsb.rs
+@@ -13,6 +13,7 @@ use std::path::PathBuf;
+ 
+ use bevy::prelude::*;
+ use bevy_ramod::prelude::*;
++use bevy::prelude::Vec3;
+ 
+ fn main() {
+     App::new()
+@@ -67,7 +68,7 @@ fn setup(mut commands: Commands, mut audio: ResMut<RamodAudio>) {
+     }
+ 
+     if !found {
+-        bevy::log::warn!("No Master.fsb found — demo tone fallback");
++        log::warn!("No Master.fsb found — demo tone fallback");
+         audio.register_demo_tone("event:/fsb/demo", 440.0);
+     }
+ 
+@@ -91,5 +92,5 @@ fn spawn_when_ready(
+         AudioParameter::new("Intensity", 0.9),
+     ));
+     ready.spawned = true;
+-    bevy::log::info!("Playing {event}");
++    log::info!("Playing {event}");
+ }
+diff --git a/bevy_ramod/src/assets.rs b/bevy_ramod/src/assets.rs
+index f649455..b69f835 100644
+--- a/bevy_ramod/src/assets.rs
++++ b/bevy_ramod/src/assets.rs
+@@ -62,7 +62,7 @@ struct BankFile {
+     events: Vec<BankEventAsset>,
+ }
+ 
+-#[derive(Default)]
++#[derive(Default, TypePath)]
+ pub struct RamodBankLoader;
+ 
+ #[derive(Debug, Error)]
+@@ -92,7 +92,7 @@ impl AssetLoader for RamodBankLoader {
+         let base_dir = load_context
+             .path()
+             .parent()
+-            .map(|p| p.to_path_buf());
++            .map(|p| p.path().to_path_buf());
+ 
+         Ok(RamodBankAsset {
+             name: file.name,
+diff --git a/bevy_ramod/src/plugin.rs b/bevy_ramod/src/plugin.rs
+index ab0c716..f28fcc5 100644
+--- a/bevy_ramod/src/plugin.rs
++++ b/bevy_ramod/src/plugin.rs
+@@ -42,13 +42,13 @@ impl LiveUpdateHub {
+     pub fn bind_default() -> Self {
+         match LiveUpdateServer::bind_default() {
+             Ok(server) => {
+-                bevy::log::info!("Live Update listening on {}", server.local_addr());
++                log::info!("Live Update listening on {}", server.local_addr());
+                 Self {
+                     server: Some(server),
+                 }
+             }
+             Err(e) => {
+-                bevy::log::warn!("Live Update bind failed: {e}");
++                log::warn!("Live Update bind failed: {e}");
+                 Self { server: None }
+             }
+         }
+@@ -157,7 +157,7 @@ impl RamodAudio {
+             let (samples, channels, sample_rate) = match fsb_sample_to_pcm(&bank, i) {
+                 Ok(v) => v,
+                 Err(e) => {
+-                    bevy::log::warn!("FSB sample '{}': {e}", sample.name);
++                    log::warn!("FSB sample '{}': {e}", sample.name);
+                     continue;
+                 }
+             };
+@@ -165,7 +165,7 @@ impl RamodAudio {
+             let buf = match self.runtime.load_pcm(samples, channels, sample_rate) {
+                 Ok(b) => b,
+                 Err(e) => {
+-                    bevy::log::warn!("load_pcm {}: {e}", sample.name);
++                    log::warn!("load_pcm {}: {e}", sample.name);
+                     continue;
+                 }
+             };
+@@ -183,7 +183,7 @@ impl RamodAudio {
+             count += 1;
+         }
+ 
+-        bevy::log::info!(
++        log::info!(
+             "RamodAudio: registered {count}/{} samples from FSB '{}'",
+             bank.len(),
+             path.display()
+@@ -218,11 +218,11 @@ impl RamodAudio {
+                     }
+                 }
+                 Err(e) => {
+-                    bevy::log::warn!("bank event {}: {e}", ev.path);
++                    log::warn!("bank event {}: {e}", ev.path);
+                 }
+             }
+         }
+-        bevy::log::info!(
++        log::info!(
+             "RamodAudio: registered {count}/{} events from bank '{}' ({} from FSB)",
+             bank.events.len(),
+             bank.name,
+@@ -393,7 +393,7 @@ fn load_fsb_pcm_index(
+     let bank = match Fsb5::from_file(&path) {
+         Ok(b) => b,
+         Err(e) => {
+-            bevy::log::warn!("hybrid FSB {}: {e}", path.display());
++            log::warn!("hybrid FSB {}: {e}", path.display());
+             return None;
+         }
+     };
+@@ -406,10 +406,10 @@ fn load_fsb_pcm_index(
+             Ok(pcm) => {
+                 map.insert(sample.name.clone(), pcm);
+             }
+-            Err(e) => bevy::log::warn!("FSB sample '{}': {e}", sample.name),
++            Err(e) => log::warn!("FSB sample '{}': {e}", sample.name),
+         }
+     }
+-    bevy::log::info!(
++    log::info!(
+         "hybrid: indexed {} samples from {}",
+         map.len(),
+         path.display()
+@@ -435,7 +435,7 @@ impl Default for RamodPlugin {
+ impl Plugin for RamodPlugin {
+     fn build(&self, app: &mut App) {
+         let audio = RamodAudio::new(self.open_device).unwrap_or_else(|e| {
+-            bevy::log::error!("RamodAudio init failed: {e}; falling back to headless");
++            log::error!("RamodAudio init failed: {e}; falling back to headless");
+             RamodAudio::new(false).expect("headless runtime")
+         });
+ 
+@@ -475,8 +475,8 @@ fn process_load_bank(
+ ) {
+     for (entity, load) in &q {
+         match audio.load_bank_path(&load.path) {
+-            Ok(n) => bevy::log::info!("LoadBank {}: {n} events/samples", load.path.display()),
+-            Err(e) => bevy::log::error!("LoadBank {}: {e}", load.path.display()),
++            Ok(n) => log::info!("LoadBank {}: {n} events/samples", load.path.display()),
++            Err(e) => log::error!("LoadBank {}: {e}", load.path.display()),
+         }
+         commands.entity(entity).remove::<LoadBank>();
+     }
+@@ -559,7 +559,7 @@ fn start_emitters(
+                 instances.insert(entity, id);
+             }
+             Err(e) => {
+-                bevy::log::warn!("play_event {}: {e}", emitter.event);
++                log::warn!("play_event {}: {e}", emitter.event);
+             }
+         }
+         commands.entity(entity).remove::<PlayOnSpawn>();
+@@ -642,7 +642,7 @@ fn cleanup_despawned_emitters(
+     for entity in removed.read() {
+         if let Some(id) = instances.remove(entity) {
+             audio.runtime.release_instance(id);
+-            bevy::log::debug!("released instance {id} for despawned {entity:?}");
++            log::debug!("released instance {id} for despawned {entity:?}");
+         }
+     }
+ }
+@@ -650,7 +650,7 @@ fn cleanup_despawned_emitters(
+ fn live_update_poll(mut audio: ResMut<RamodAudio>, mut live: ResMut<LiveUpdateHub>) {
+     if let Some(server) = live.server.as_mut() {
+         if let Err(e) = server.poll(&mut audio.runtime) {
+-            bevy::log::debug!("live poll: {e}");
++            log::debug!("live poll: {e}");
+         }
+     }
+ }
+diff --git a/bevy_ramod/src/renzora.rs b/bevy_ramod/src/renzora.rs
+index a81a0ee..f74bcb7 100644
+--- a/bevy_ramod/src/renzora.rs
++++ b/bevy_ramod/src/renzora.rs
+@@ -63,7 +63,7 @@ impl RenzoraRamodExt for App {
+             live_update: true,
+             replace_kira: false,
+         });
+-        bevy::log::info!(
++        log::info!(
+             "bevy_ramod: Renzora host markers enabled ({})",
+             bevy_ramod_renzora_bridge_version()
+         );
+@@ -87,7 +87,7 @@ impl RenzoraRamodExt for App {
+             live_update: true,
+             replace_kira: true,
+         });
+-        bevy::log::info!(
++        log::info!(
+             "bevy_ramod: RaMOD is the primary audio path — do not register Kira \
+              (replace_kira=true, {})",
+             bevy_ramod_renzora_bridge_version()
+@@ -98,7 +98,7 @@ impl RenzoraRamodExt for App {
+     fn insert_ramod_renzora_backend(&mut self, open_device: bool) -> Result<&mut Self, String> {
+         let backend = RamodRenzoraBackend::new(open_device)?;
+         self.insert_non_send_resource(RamodBackendCell { backend });
+-        bevy::log::info!(
++        log::info!(
+             "bevy_ramod: RamodRenzoraBackend inserted as NonSend ({})",
+             bevy_ramod_renzora_bridge_version()
+         );
+diff --git a/editor/src/waveform_panel.rs b/editor/src/waveform_panel.rs
+index b947442..7e1671a 100644
+--- a/editor/src/waveform_panel.rs
++++ b/editor/src/waveform_panel.rs
+@@ -1,7 +1,10 @@
+-//! egui Waveform panel — multi-format import + preview.
++//! egui Waveform panel — multi-format import, zoom/pan viewport, effects, preview.
++//!
++//! The frame↔pixel mapping lives in [`ramod_waveform::Viewport`] so the painted
++//! envelope, the selection drag and the zoom controls all use the same numbers.
+ 
+ use egui::{self, Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+-use ramod_waveform::{PeakMinMax, WaveBuffer};
++use ramod_waveform::{CompressorParams, EqBand, PeakMinMax, Viewport, WaveBuffer};
+ use std::path::{Path, PathBuf};
+ 
+ pub struct WaveformPanel {
+@@ -9,10 +12,16 @@ pub struct WaveformPanel {
+     pub clipboard: Vec<f32>,
+     pub show: bool,
+     pub status: String,
+-    drag_start: Option<f32>,
++    /// Fractional frame where the current selection drag started.
++    drag_start: Option<f64>,
++    viewport: Viewport,
+     export_path: String,
+     import_path: String,
+     gain_db: f32,
++    eq_freq_hz: f32,
++    eq_gain_db: f32,
++    pitch_semitones: f32,
++    stretch_ratio: f32,
+     pub last_import_path: Option<PathBuf>,
+ }
+ 
+@@ -24,9 +33,14 @@ impl Default for WaveformPanel {
+             show: true,
+             status: "Load or generate a waveform".into(),
+             drag_start: None,
++            viewport: Viewport::default(),
+             export_path: "export.wav".into(),
+             import_path: String::new(),
+             gain_db: 0.0,
++            eq_freq_hz: 1_000.0,
++            eq_gain_db: 0.0,
++            pitch_semitones: 0.0,
++            stretch_ratio: 1.0,
+             last_import_path: None,
+         }
+     }
+@@ -45,6 +59,7 @@ impl WaveformPanel {
+         match WaveBuffer::new(samples, 1, rate) {
+             Ok(mut w) => {
+                 w.select_all();
++                self.viewport = Viewport::new(w.frames());
+                 self.wave = Some(w);
+                 self.last_import_path = None;
+                 self.status = "Demo tone 440 Hz (0.5 s)".into();
+@@ -65,6 +80,7 @@ impl WaveformPanel {
+                 );
+                 self.import_path = path.to_string_lossy().into_owned();
+                 self.last_import_path = Some(path.to_path_buf());
++                self.viewport = Viewport::new(w.frames());
+                 self.wave = Some(w);
+                 true
+             }
+@@ -114,6 +130,10 @@ impl WaveformPanel {
+             self.toolbar(ui);
+         });
+ 
++        ui.horizontal(|ui| {
++            self.effects_row(ui);
++        });
++
+         ui.horizontal(|ui| {
+             ui.label("Import audio");
+             ui.add(
+@@ -137,63 +157,20 @@ impl WaveformPanel {
+ 
+         ui.separator();
+ 
+-        let height = 120.0;
+-        let (response, painter) =
+-            ui.allocate_painter(Vec2::new(ui.available_width(), height), Sense::click_and_drag());
+-        let rect = response.rect;
+-
+-        if response.drag_started() {
+-            if let Some(pos) = response.interact_pointer_pos() {
+-                self.drag_start = Some(((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+-            }
+-        }
+-        if let Some(start_n) = self.drag_start {
+-            if let Some(pos) = response.interact_pointer_pos() {
+-                if let Some(w) = self.wave.as_mut() {
+-                    let end_n = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+-                    let a = (start_n.min(end_n) * w.frames() as f32) as usize;
+-                    let b = (start_n.max(end_n) * w.frames() as f32) as usize;
+-                    w.set_selection(a, b.max(a + 1).min(w.frames()));
+-                }
+-            }
+-        }
+-        if response.drag_stopped() {
+-            self.drag_start = None;
+-        }
+-
+-        painter.rect_filled(rect, 2.0, Color32::from_rgb(22, 22, 26));
+-        painter.rect_stroke(rect, 2.0, Stroke::new(1.0, Color32::from_rgb(50, 50, 55)));
+-
+-        let mid_y = rect.center().y;
+-        painter.line_segment(
+-            [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+-            Stroke::new(1.0, Color32::from_rgb(40, 40, 48)),
+-        );
+-
+-        if let Some(w) = self.wave.as_ref() {
+-            let buckets = (rect.width() as usize).clamp(32, 2048);
+-            let overview = w.overview(buckets);
+-            Self::paint_overview(&painter, rect, &overview, mid_y);
+-            Self::paint_selection(&painter, rect, w);
+-        } else {
+-            painter.text(
+-                rect.center(),
+-                egui::Align2::CENTER_CENTER,
+-                "No waveform — Import or Demo tone",
+-                egui::FontId::proportional(14.0),
+-                Color32::from_rgb(120, 120, 130),
+-            );
+-        }
++        self.canvas(ui);
+ 
+         ui.horizontal(|ui| {
+             if let Some(w) = self.wave.as_ref() {
++                let (a, b) = self.viewport.visible_range();
+                 ui.weak(format!(
+-                    "frames={}  sr={}  ch={}  sel=[{}..{})  {:.3}s",
++                    "frames={}  sr={}  ch={}  sel=[{}..{})  view=[{}..{})  {:.3}s",
+                     w.frames(),
+                     w.sample_rate,
+                     w.channels,
+                     w.selection.start,
+                     w.selection.end,
++                    a,
++                    b,
+                     w.duration_secs()
+                 ));
+             }
+@@ -220,6 +197,149 @@ impl WaveformPanel {
+         action
+     }
+ 
++    /// Painted waveform with wheel pan, ctrl+wheel zoom and drag selection.
++    fn canvas(&mut self, ui: &mut Ui) {
++        let height = 160.0;
++        let (response, painter) = ui.allocate_painter(
++            Vec2::new(ui.available_width(), height),
++            Sense::click_and_drag(),
++        );
++        let rect = response.rect;
++        let width = rect.width().max(1.0);
++
++        // A time-stretch or a cut changes the frame count under the viewport.
++        let frames = self.wave.as_ref().map(|w| w.frames()).unwrap_or(0);
++        self.viewport.set_total(frames);
++
++        if response.hovered() {
++            let (scroll, modifiers) = ui.input(|i| (i.raw_scroll_delta, i.modifiers));
++            if scroll.y.abs() > 0.0 {
++                let anchor_px = response
++                    .hover_pos()
++                    .map(|p| (p.x - rect.left()).clamp(0.0, width))
++                    .unwrap_or(width * 0.5);
++                if modifiers.ctrl || modifiers.command {
++                    let anchor = self.viewport.frame_at_f(anchor_px, width);
++                    let factor = if scroll.y > 0.0 { 0.8 } else { 1.25 };
++                    self.viewport.zoom_at(anchor, factor);
++                } else {
++                    let per_px = self.viewport.frames_per_px(width);
++                    self.viewport.pan_frames(-scroll.y as f64 * per_px * 3.0);
++                }
++            }
++        }
++
++        let vp = self.viewport;
++        if response.drag_started() {
++            if let Some(pos) = response.interact_pointer_pos() {
++                self.drag_start =
++                    Some(vp.frame_at_f((pos.x - rect.left()).clamp(0.0, width), width));
++            }
++        }
++        if let (Some(start), Some(pos)) = (self.drag_start, response.interact_pointer_pos()) {
++            let end = vp.frame_at_f((pos.x - rect.left()).clamp(0.0, width), width);
++            if let Some(w) = self.wave.as_mut() {
++                let a = start.min(end).floor().max(0.0) as usize;
++                let b = start.max(end).ceil().max(a as f64 + 1.0) as usize;
++                w.set_selection(a, b);
++            }
++        }
++        if response.drag_stopped() {
++            self.drag_start = None;
++        }
++
++        painter.rect_filled(rect, 2.0, Color32::from_rgb(22, 22, 26));
++        let border = Stroke::new(1.0_f32, Color32::from_rgb(50, 50, 55));
++        painter.line_segment([rect.left_top(), rect.right_top()], border);
++        painter.line_segment([rect.right_top(), rect.right_bottom()], border);
++        painter.line_segment([rect.right_bottom(), rect.left_bottom()], border);
++        painter.line_segment([rect.left_bottom(), rect.left_top()], border);
++
++        let mid_y = rect.center().y;
++        painter.line_segment(
++            [
++                Pos2::new(rect.left(), mid_y),
++                Pos2::new(rect.right(), mid_y),
++            ],
++            Stroke::new(1.0_f32, Color32::from_rgb(40, 40, 48)),
++        );
++
++        match self.wave.as_ref() {
++            Some(w) => {
++                // Second markers, so a zoomed view has a readable time scale.
++                let rate = w.sample_rate.max(1) as f64;
++                let secs_per_px = vp.frames_per_px(width) / rate;
++                if secs_per_px > 0.0 {
++                    let step = nice_step(secs_per_px * 90.0);
++                    let mut t = (vp.start() / rate / step).floor() * step;
++                    let last = vp.end() / rate;
++                    let tick = Stroke::new(1.0_f32, Color32::from_rgb(38, 38, 46));
++                    while t <= last {
++                        let frame = t * rate;
++                        if frame >= vp.start() {
++                            let x = rect.left() + vp.x_of(frame, width);
++                            painter.line_segment(
++                                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
++                                tick,
++                            );
++                        }
++                        t += step;
++                    }
++                }
++
++                let (a, b) = vp.visible_range();
++                let span = b.saturating_sub(a);
++                if span > 0 {
++                    let buckets = (width as usize).clamp(32, 4096);
++                    let overview = w.overview_range(a, span, buckets);
++                    Self::paint_overview(&painter, rect, &overview, mid_y);
++                }
++                Self::paint_selection(&painter, rect, w, &vp, width);
++            }
++            None => {
++                painter.text(
++                    rect.center(),
++                    egui::Align2::CENTER_CENTER,
++                    "No waveform — Import or Demo tone",
++                    egui::FontId::proportional(14.0),
++                    Color32::from_rgb(120, 120, 130),
++                );
++            }
++        }
++
++        // Zoom controls sit directly under the canvas they affect.
++        ui.horizontal(|ui| {
++            let enabled = self.wave.is_some();
++            if ui.add_enabled(enabled, egui::Button::new("−")).clicked() {
++                self.viewport.zoom(1.5);
++            }
++            if ui.add_enabled(enabled, egui::Button::new("+")).clicked() {
++                self.viewport.zoom(0.6667);
++            }
++            if ui.add_enabled(enabled, egui::Button::new("Fit")).clicked() {
++                self.viewport.fit();
++            }
++            if ui
++                .add_enabled(enabled, egui::Button::new("Zoom sel"))
++                .clicked()
++            {
++                if let Some(w) = self.wave.as_ref() {
++                    if !w.selection.is_empty() {
++                        self.viewport
++                            .zoom_to_selection(w.selection.start, w.selection.end);
++                    }
++                }
++            }
++            let visible = self.viewport.visible_frames();
++            let total = self.viewport.total().max(1) as f64;
++            ui.weak(format!(
++                "zoom ×{:.1}  ({} frames visible, ctrl+wheel to zoom, wheel to pan)",
++                total / visible.max(1.0),
++                visible.round() as usize
++            ));
++        });
++    }
++
+     fn toolbar(&mut self, ui: &mut Ui) {
+         if self.wave.is_none() {
+             return;
+@@ -273,19 +393,102 @@ impl WaveformPanel {
+                 w.apply_gain(g);
+             }
+         }
+-        if ui.button("Undo").clicked() {
++        let can_undo = self.wave.as_ref().is_some_and(|w| w.can_undo());
++        let can_redo = self.wave.as_ref().is_some_and(|w| w.can_redo());
++        if ui
++            .add_enabled(can_undo, egui::Button::new("Undo"))
++            .clicked()
++        {
+             if let Some(w) = self.wave.as_mut() {
+                 let _ = w.undo();
+             }
+         }
++        if ui
++            .add_enabled(can_redo, egui::Button::new("Redo"))
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                let _ = w.redo();
++            }
++        }
+     }
+ 
+-    fn paint_overview(
+-        painter: &egui::Painter,
+-        rect: Rect,
+-        overview: &[PeakMinMax],
+-        mid_y: f32,
+-    ) {
++    /// EQ, dynamics, pitch and time-stretch over the selection.
++    fn effects_row(&mut self, ui: &mut Ui) {
++        if self.wave.is_none() {
++            return;
++        }
++        let empty_selection = self.wave.as_ref().is_some_and(|w| w.selection.is_empty());
++        let enabled = !empty_selection;
++
++        ui.label("EQ");
++        ui.add(
++            egui::Slider::new(&mut self.eq_freq_hz, 40.0..=12_000.0)
++                .logarithmic(true)
++                .suffix(" Hz"),
++        );
++        ui.add(egui::Slider::new(&mut self.eq_gain_db, -18.0..=18.0).suffix(" dB"));
++        if ui
++            .add_enabled(enabled, egui::Button::new("Apply EQ"))
++            .on_hover_text("Peaking band, Q 1.0")
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                w.apply_eq(&[EqBand::new(self.eq_freq_hz, self.eq_gain_db, 1.0)]);
++            }
++        }
++
++        ui.separator();
++        if ui
++            .add_enabled(enabled, egui::Button::new("Compress"))
++            .on_hover_text("4:1 above −18 dB, stereo linked")
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                w.apply_compress(CompressorParams::default());
++            }
++        }
++        if ui
++            .add_enabled(enabled, egui::Button::new("Limit −1 dB"))
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                w.apply_limit(-1.0);
++            }
++        }
++
++        ui.separator();
++        ui.add(
++            egui::Slider::new(&mut self.pitch_semitones, -12.0..=12.0)
++                .suffix(" st")
++                .text("pitch"),
++        );
++        if ui
++            .add_enabled(enabled, egui::Button::new("Shift"))
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                w.apply_pitch(self.pitch_semitones);
++            }
++        }
++
++        ui.separator();
++        ui.add(
++            egui::Slider::new(&mut self.stretch_ratio, 0.25..=4.0)
++                .suffix("×")
++                .text("stretch"),
++        );
++        if ui
++            .add_enabled(enabled, egui::Button::new("Stretch"))
++            .clicked()
++        {
++            if let Some(w) = self.wave.as_mut() {
++                w.apply_time_stretch(self.stretch_ratio);
++            }
++        }
++    }
++
++    fn paint_overview(painter: &egui::Painter, rect: Rect, overview: &[PeakMinMax], mid_y: f32) {
+         if overview.is_empty() {
+             return;
+         }
+@@ -298,28 +501,34 @@ impl WaveformPanel {
+             let y1 = mid_y - p.min.clamp(-1.0, 1.0) * half_h;
+             painter.line_segment(
+                 [Pos2::new(x, y0), Pos2::new(x, y1)],
+-                Stroke::new(1.0, color),
++                Stroke::new(1.0_f32, color),
+             );
+         }
+     }
+ 
+-    fn paint_selection(painter: &egui::Painter, rect: Rect, w: &WaveBuffer) {
+-        let frames = w.frames().max(1) as f32;
+-        let x0 = rect.left() + (w.selection.start as f32 / frames) * rect.width();
+-        let x1 = rect.left() + (w.selection.end as f32 / frames) * rect.width();
++    fn paint_selection(
++        painter: &egui::Painter,
++        rect: Rect,
++        w: &WaveBuffer,
++        vp: &Viewport,
++        width: f32,
++    ) {
++        let x0 = rect.left() + vp.x_of(w.selection.start as f64, width);
++        let x1 = rect.left() + vp.x_of(w.selection.end as f64, width);
+         let sel = Rect::from_min_max(
+-            Pos2::new(x0, rect.top()),
+-            Pos2::new(x1, rect.bottom()),
++            Pos2::new(x0.clamp(rect.left(), rect.right()), rect.top()),
++            Pos2::new(x1.clamp(rect.left(), rect.right()), rect.bottom()),
+         );
+         painter.rect_filled(sel, 0.0, Color32::from_rgba_unmultiplied(70, 120, 200, 50));
+-        painter.line_segment(
+-            [Pos2::new(x0, rect.top()), Pos2::new(x0, rect.bottom())],
+-            Stroke::new(1.0, Color32::from_rgb(200, 180, 80)),
+-        );
+-        painter.line_segment(
+-            [Pos2::new(x1, rect.top()), Pos2::new(x1, rect.bottom())],
+-            Stroke::new(1.0, Color32::from_rgb(200, 180, 80)),
+-        );
++        let edge = Stroke::new(1.0_f32, Color32::from_rgb(200, 180, 80));
++        for x in [x0, x1] {
++            if x >= rect.left() && x <= rect.right() {
++                painter.line_segment(
++                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
++                    edge,
++                );
++            }
++        }
+     }
+ 
+     fn export(&mut self, selection_only: bool) {
+@@ -334,6 +543,26 @@ impl WaveformPanel {
+     }
+ }
+ 
++/// Round a time step to 1, 2 or 5 × a power of ten, so tick labels stay legible.
++fn nice_step(raw: f64) -> f64 {
++    if !raw.is_finite() || raw <= 0.0 {
++        return 1.0;
++    }
++    let exp = raw.log10().floor();
++    let base = 10f64.powf(exp);
++    let n = raw / base;
++    let mult = if n <= 1.0 {
++        1.0
++    } else if n <= 2.0 {
++        2.0
++    } else if n <= 5.0 {
++        5.0
++    } else {
++        10.0
++    };
++    mult * base
++}
++
+ #[derive(Debug, Clone)]
+ pub enum WaveformAction {
+     None,
+diff --git a/recovery/fsb.rs b/recovery/fsb.rs
+new file mode 100644
+index 0000000..02d684a
+--- /dev/null
++++ b/recovery/fsb.rs
+@@ -0,0 +1,1001 @@
++//! FSB5 sound-bank container parsing.
++//!
++//! This module parses the FSB5 container that content-authoring tools use to
++//! package audio samples for their event banks (`.fsb`). It is the foundation
++//! of the RaMOD audio middleware: once samples and their metadata are decoded,
++//! the modding suite can list, extract, replace and re-encode bank contents.
++//!
++//! The layout implemented here was cross-checked against the REA analysis of
++//! the `libfsbvorbis64.dll` shipped with a stock authoring tool and the publicly
++//! documented FSB5 binary template. Field names mirror that template so the
++//! code stays traceable to the reverse-engineered source.
++//!
++//! FSB5 header (little-endian):
++//! ```text
++//! 0x00 char[4]  magic = "FSB5"
++//! 0x04 u32      version
++//! 0x08 u32      num_samples
++//! 0x0C u32      sample_header_size   (total size of the sample-header region)
++//! 0x10 u32      name_table_size
++//! 0x14 u32      data_size
++//! 0x18 u32      mode                (sound format)
++//! 0x1C u8[8]    zero
++//! 0x24 u8[16]   hash
++//! 0x34 u8[8]    dummy
++//! 0x3C u32      unknown             (only when version == 0)
++//! ```
++
++use std::fmt;
++
++/// Magic bytes at the start of every FSB5 bank.
++pub const FSB5_MAGIC: [u8; 4] = *b"FSB5";
++
++/// Number of bytes occupied by the FSB5 header for version 1 (and later).
++pub const FSB5_HEADER_SIZE: usize = 60;
++
++/// Number of bytes occupied by the FSB5 header for version 0.
++pub const FSB5_HEADER_SIZE_V0: usize = 64;
++
++/// Errors produced while parsing an FSB5 container.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum FsbError {
++    /// The buffer is smaller than the structure being read.
++    TooShort { needed: usize, got: usize },
++    /// The first four bytes are not `FSB5`.
++    BadMagic([u8; 4]),
++    /// A read ran past the end of the buffer.
++    Truncated {
++        context: &'static str,
++        offset: usize,
++    },
++    /// The declared number of samples cannot fit in the buffer.
++    SampleCountTooLarge {
++        samples: u32,
++        available_bytes: usize,
++    },
++}
++
++impl fmt::Display for FsbError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            FsbError::TooShort { needed, got } => {
++                write!(f, "buffer too short: needed {needed} bytes, got {got}")
++            }
++            FsbError::BadMagic(magic) => {
++                write!(f, "not an FSB5 bank: magic bytes were {magic:?}")
++            }
++            FsbError::Truncated { context, offset } => {
++                write!(f, "truncated while reading {context} at offset {offset}")
++            }
++            FsbError::SampleCountTooLarge {
++                samples,
++                available_bytes,
++            } => write!(
++                f,
++                "declared {samples} samples but only {available_bytes} bytes are available"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for FsbError {}
++
++/// Audio sample encoding declared by an FSB5 bank.
++///
++/// Values match the `MODE` enum in the FSB5 specification.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum SoundFormat {
++    None,
++    Pcm8,
++    Pcm16,
++    Pcm24,
++    Pcm32,
++    PcmFloat,
++    Gcadpcm,
++    Imaadpcm,
++    Vag,
++    Hevag,
++    Xma,
++    Mpeg,
++    Celt,
++    At9,
++    Xwma,
++    Vorbis,
++    /// A mode value not covered by the specification.
++    Unknown(u32),
++}
++
++impl SoundFormat {
++    /// Decode the on-disk `mode` field.
++    pub fn from_u32(value: u32) -> Self {
++        match value {
++            0 => SoundFormat::None,
++            1 => SoundFormat::Pcm8,
++            2 => SoundFormat::Pcm16,
++            3 => SoundFormat::Pcm24,
++            4 => SoundFormat::Pcm32,
++            5 => SoundFormat::PcmFloat,
++            6 => SoundFormat::Gcadpcm,
++            7 => SoundFormat::Imaadpcm,
++            8 => SoundFormat::Vag,
++            9 => SoundFormat::Hevag,
++            10 => SoundFormat::Xma,
++            11 => SoundFormat::Mpeg,
++            12 => SoundFormat::Celt,
++            13 => SoundFormat::At9,
++            14 => SoundFormat::Xwma,
++            15 => SoundFormat::Vorbis,
++            other => SoundFormat::Unknown(other),
++        }
++    }
++
++    /// Encode back to the on-disk `mode` field.
++    pub fn as_u32(self) -> u32 {
++        match self {
++            SoundFormat::None => 0,
++            SoundFormat::Pcm8 => 1,
++            SoundFormat::Pcm16 => 2,
++            SoundFormat::Pcm24 => 3,
++            SoundFormat::Pcm32 => 4,
++            SoundFormat::PcmFloat => 5,
++            SoundFormat::Gcadpcm => 6,
++            SoundFormat::Imaadpcm => 7,
++            SoundFormat::Vag => 8,
++            SoundFormat::Hevag => 9,
++            SoundFormat::Xma => 10,
++            SoundFormat::Mpeg => 11,
++            SoundFormat::Celt => 12,
++            SoundFormat::At9 => 13,
++            SoundFormat::Xwma => 14,
++            SoundFormat::Vorbis => 15,
++            SoundFormat::Unknown(value) => value,
++        }
++    }
++
++    /// Conventional file extension for extracted sample data.
++    pub fn file_extension(self) -> &'static str {
++        match self {
++            SoundFormat::Mpeg => "mp3",
++            SoundFormat::Vorbis => "ogg",
++            SoundFormat::Pcm8 | SoundFormat::Pcm16 | SoundFormat::Pcm32 => "wav",
++            _ => "bin",
++        }
++    }
++
++    /// Whether the format is uncompressed linear PCM.
++    pub fn is_pcm(self) -> bool {
++        matches!(
++            self,
++            SoundFormat::Pcm8 | SoundFormat::Pcm16 | SoundFormat::Pcm32
++        )
++    }
++
++    /// Bytes per sample for the uncompressed formats, if applicable.
++    pub fn bytes_per_sample(self) -> Option<usize> {
++        match self {
++            SoundFormat::Pcm8 => Some(1),
++            SoundFormat::Pcm16 => Some(2),
++            SoundFormat::Pcm24 => Some(3),
++            SoundFormat::Pcm32 | SoundFormat::PcmFloat => Some(4),
++            _ => None,
++        }
++    }
++}
++
++impl fmt::Display for SoundFormat {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let name = match self {
++            SoundFormat::None => "none",
++            SoundFormat::Pcm8 => "pcm8",
++            SoundFormat::Pcm16 => "pcm16",
++            SoundFormat::Pcm24 => "pcm24",
++            SoundFormat::Pcm32 => "pcm32",
++            SoundFormat::PcmFloat => "pcm_float",
++            SoundFormat::Gcadpcm => "gcadpcm",
++            SoundFormat::Imaadpcm => "imaadpcm",
++            SoundFormat::Vag => "vag",
++            SoundFormat::Hevag => "hevag",
++            SoundFormat::Xma => "xma",
++            SoundFormat::Mpeg => "mpeg",
++            SoundFormat::Celt => "celt",
++            SoundFormat::At9 => "at9",
++            SoundFormat::Xwma => "xwma",
++            SoundFormat::Vorbis => "vorbis",
++            SoundFormat::Unknown(v) => return write!(f, "unknown({v})"),
++        };
++        f.write_str(name)
++    }
++}
++
++/// Type tag for a per-sample metadata chunk.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ChunkType {
++    Channels,
++    Frequency,
++    Loop,
++    XmaSeek,
++    DspCoeff,
++    XwmaData,
++    VorbisData,
++    Unknown(u32),
++}
++
++impl ChunkType {
++    /// Decode the on-disk chunk tag.
++    pub fn from_u32(value: u32) -> Self {
++        match value {
++            1 => ChunkType::Channels,
++            2 => ChunkType::Frequency,
++            3 => ChunkType::Loop,
++            6 => ChunkType::XmaSeek,
++            7 => ChunkType::DspCoeff,
++            10 => ChunkType::XwmaData,
++            11 => ChunkType::VorbisData,
++            other => ChunkType::Unknown(other),
++        }
++    }
++
++    /// Encode the chunk tag back to its on-disk value.
++    pub fn as_u32(self) -> u32 {
++        match self {
++            ChunkType::Channels => 1,
++            ChunkType::Frequency => 2,
++            ChunkType::Loop => 3,
++            ChunkType::XmaSeek => 6,
++            ChunkType::DspCoeff => 7,
++            ChunkType::XwmaData => 10,
++            ChunkType::VorbisData => 11,
++            ChunkType::Unknown(value) => value,
++        }
++    }
++}
++
++impl fmt::Display for ChunkType {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            ChunkType::Channels => f.write_str("channels"),
++            ChunkType::Frequency => f.write_str("frequency"),
++            ChunkType::Loop => f.write_str("loop"),
++            ChunkType::XmaSeek => f.write_str("xma_seek"),
++            ChunkType::DspCoeff => f.write_str("dsp_coeff"),
++            ChunkType::XwmaData => f.write_str("xwma_data"),
++            ChunkType::VorbisData => f.write_str("vorbis_data"),
++            ChunkType::Unknown(v) => write!(f, "unknown({v})"),
++        }
++    }
++}
++
++/// A decoded per-sample metadata chunk.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Chunk {
++    /// Chunk tag.
++    pub kind: ChunkType,
++    /// Raw chunk payload (length matches the size declared on disk).
++    pub data: Vec<u8>,
++}
++
++/// Decoded `VORBISDATA` metadata chunk.
++///
++/// The chunk begins with a CRC32 that keys one of the pre-built Vorbis
++/// setup headers, followed by a seek table of `(offset, granule_position)`
++/// pairs (see the FSB5 binary template). The table may be sparse — a reference
++/// records roughly one entry per second of audio — but each entry's offset
++/// points at the start of a packet in the sample data.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct VorbisData {
++    /// Identifier of the setup header required to decode the stream.
++    pub setup_crc32: u32,
++    /// Seek table entries: byte offset into the sample data plus granule position.
++    pub seek_table: Vec<(u32, u32)>,
++}
++
++/// One Vorbis packet stored inside an FSB5 `VORBIS` sample.
++///
++/// Packets are serialised as a little-endian `u16` length followed by exactly
++/// that many Vorbis packet bytes; a length of zero terminates the stream.
++///
++/// There is no separate flags byte: the first bit of the payload is Vorbis'
++/// own audio/header discriminator (it is zero for audio packets), so all
++/// `size` bytes belong to the packet. This matches both the reference output and
++/// the bundled reference decoder (`reference/reference_vorbis.py`).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct VorbisPacket<'a> {
++    /// Packet payload, without the length prefix.
++    pub data: &'a [u8],
++}
++
++impl<'a> VorbisPacket<'a> {
++    /// Whether this is an audio packet.
++    ///
++    /// Vorbis audio packets begin with a zero bit, so every packet in an FSB5
++    /// stream is normally an audio packet.
++    pub fn is_audio(&self) -> bool {
++        self.data.first().is_some_and(|byte| byte & 0x01 == 0)
++    }
++}
++
++/// Iterator over the Vorbis packets of an FSB5 sample.
++#[derive(Debug, Clone)]
++pub struct VorbisPacketIter<'a> {
++    data: &'a [u8],
++    cursor: usize,
++    done: bool,
++}
++
++impl<'a> Iterator for VorbisPacketIter<'a> {
++    type Item = VorbisPacket<'a>;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        if self.done || self.cursor + 2 > self.data.len() {
++            self.done = true;
++            return None;
++        }
++        let size =
++            u16::from_le_bytes([self.data[self.cursor], self.data[self.cursor + 1]]) as usize;
++        self.cursor += 2;
++        if size == 0 || self.cursor + size > self.data.len() {
++            self.done = true;
++            return None;
++        }
++        let payload = &self.data[self.cursor..self.cursor + size];
++        self.cursor += size;
++        Some(VorbisPacket { data: payload })
++    }
++}
++
++/// One sample entry in an FSB5 bank.
++#[derive(Debug, Clone, Default, PartialEq, Eq)]
++pub struct Sample {
++    /// Zero-based index inside the bank.
++    pub index: usize,
++    /// Name from the bank's name table (or `{:04}` of the index when absent).
++    pub name: String,
++    /// Sample rate in hertz.
++    pub frequency: u32,
++    /// Channel count.
++    pub channels: u32,
++    /// Offset of the sample data, in bytes, from the start of the data section.
++    pub data_offset: u32,
++    /// Number of audio frames.
++    pub num_frames: u32,
++    /// Loop start frame, when a LOOP chunk is present.
++    pub loop_start: Option<u32>,
++    /// Loop end frame, when a LOOP chunk is present.
++    pub loop_end: Option<u32>,
++    /// Whether the sample header carried extra metadata chunks.
++    pub has_extra_params: bool,
++    /// Decoded metadata chunks in on-disk order.
++    pub chunks: Vec<Chunk>,
++}
++
++impl Sample {
++    /// Duration in seconds, computed from the frame count and sample rate.
++    pub fn duration_seconds(&self) -> f32 {
++        if self.frequency == 0 {
++            0.0
++        } else {
++            self.num_frames as f32 / self.frequency as f32
++        }
++    }
++
++    /// Whether the sample carries loop metadata.
++    pub fn is_looped(&self) -> bool {
++        self.loop_start.is_some() && self.loop_end.is_some()
++    }
++
++    /// The `VORBISDATA` chunk, when the sample carries one.
++    pub fn vorbis_chunk(&self) -> Option<&Chunk> {
++        self.chunks
++            .iter()
++            .find(|chunk| chunk.kind == ChunkType::VorbisData)
++    }
++
++    /// Decode the `VORBISDATA` chunk into its setup-header id and seek table.
++    pub fn vorbis_data(&self) -> Option<VorbisData> {
++        let payload = &self.vorbis_chunk()?.data;
++        if payload.len() < 4 {
++            return None;
++        }
++        let setup_crc32 = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
++        let mut seek_table = Vec::new();
++        let mut cursor = 4;
++        while cursor + 8 <= payload.len() {
++            seek_table.push((
++                u32::from_le_bytes([
++                    payload[cursor],
++                    payload[cursor + 1],
++                    payload[cursor + 2],
++                    payload[cursor + 3],
++                ]),
++                u32::from_le_bytes([
++                    payload[cursor + 4],
++                    payload[cursor + 5],
++                    payload[cursor + 6],
++                    payload[cursor + 7],
++                ]),
++            ));
++            cursor += 8;
++        }
++        Some(VorbisData {
++            setup_crc32,
++            seek_table,
++        })
++    }
++}
++
++/// A fully parsed FSB5 bank.
++#[derive(Debug, Clone)]
++pub struct Fsb5 {
++    /// Container version field.
++    pub version: u32,
++    /// Number of samples declared by the header.
++    pub num_samples: usize,
++    /// Total size of the sample-header region.
++    pub sample_header_size: u32,
++    /// Size of the name table.
++    pub name_table_size: u32,
++    /// Size of the sample-data region.
++    pub data_size: u32,
++    /// Audio encoding for every sample in the bank.
++    pub format: SoundFormat,
++    /// Size, in bytes, of the header preceding the sample-header region.
++    pub header_size: usize,
++    /// Absolute offset of the sample-data region.
++    pub data_section_offset: usize,
++    /// Decoded samples.
++    pub samples: Vec<Sample>,
++    /// Raw 8-byte header `zero` field, retained for faithful re-serialisation.
++    header_zero: [u8; 8],
++    /// Raw 16-byte header `hash` field.
++    header_hash: [u8; 16],
++    /// Raw 8-byte header `dummy` field.
++    header_dummy: [u8; 8],
++    /// Complete bank bytes, retained so sample payloads can be sliced on demand.
++    data: Vec<u8>,
++}
++
++impl Fsb5 {
++    /// Parse an FSB5 bank from its raw bytes.
++    pub fn parse(data: &[u8]) -> Result<Self, FsbError> {
++        if data.len() < 4 {
++            return Err(FsbError::TooShort {
++                needed: 4,
++                got: data.len(),
++            });
++        }
++        let mut magic = [0u8; 4];
++        magic.copy_from_slice(&data[0..4]);
++        if magic != FSB5_MAGIC {
++            return Err(FsbError::BadMagic(magic));
++        }
++
++        let version = read_u32(data, 4, "version")?;
++        let num_samples = read_u32(data, 8, "numSamples")?;
++        let sample_header_size = read_u32(data, 12, "sampleHeaderSize")?;
++        let name_table_size = read_u32(data, 16, "nameTableSize")?;
++        let data_size = read_u32(data, 20, "dataSize")?;
++        let mode = read_u32(data, 24, "mode")?;
++
++        let header_size = if version == 0 {
++            FSB5_HEADER_SIZE_V0
++        } else {
++            FSB5_HEADER_SIZE
++        };
++        if data.len() < header_size {
++            return Err(FsbError::TooShort {
++                needed: header_size,
++                got: data.len(),
++            });
++        }
++
++        let mut header_zero = [0u8; 8];
++        header_zero.copy_from_slice(&data[28..36]);
++        let mut header_hash = [0u8; 16];
++        header_hash.copy_from_slice(&data[36..52]);
++        let mut header_dummy = [0u8; 8];
++        header_dummy.copy_from_slice(&data[52..60]);
++
++        let sample_count = num_samples as usize;
++        // Every sample header needs at least its 8-byte fixed part.
++        if sample_count.saturating_mul(8) > data.len() {
++            return Err(FsbError::SampleCountTooLarge {
++                samples: num_samples,
++                available_bytes: data.len(),
++            });
++        }
++
++        let format = SoundFormat::from_u32(mode);
++
++        // ---- sample headers -------------------------------------------------
++        let mut cursor = header_size;
++        let mut samples = Vec::with_capacity(sample_count);
++        for index in 0..sample_count {
++            let raw = read_u64(data, cursor, "sample header")?;
++            cursor += 8;
++
++            let has_extra_params = bits(raw, 0, 1) == 1;
++            let frequency_index = bits(raw, 1, 4) as u32;
++            let channels = bits(raw, 5, 1) as u32 + 1;
++            let data_offset_units = bits(raw, 6, 28) as u32;
++            let num_frames = bits(raw, 34, 30) as u32;
++
++            let mut sample = Sample {
++                index,
++                name: format!("{index:04}"),
++                frequency: frequency_from_index(frequency_index).unwrap_or(0),
++                channels,
++                data_offset: data_offset_units * 16,
++                num_frames,
++                has_extra_params,
++                ..Default::default()
++            };
++
++            if has_extra_params {
++                let mut next = true;
++                while next {
++                    let chunk_raw = read_u32(data, cursor, "metadata chunk")?;
++                    cursor += 4;
++                    next = bits(chunk_raw as u64, 0, 1) == 1;
++                    let size = bits(chunk_raw as u64, 1, 24) as u32;
++                    let tag = bits(chunk_raw as u64, 25, 7) as u32;
++                    let payload =
++                        read_bytes(data, cursor, size as usize, "metadata payload")?.to_vec();
++                    cursor += size as usize;
++                    apply_chunk(&mut sample, tag, &payload);
++                    sample.chunks.push(Chunk {
++                        kind: ChunkType::from_u32(tag),
++                        data: payload,
++                    });
++                }
++            }
++
++            samples.push(sample);
++        }
++
++        // ---- name table -----------------------------------------------------
++        let name_table_start = header_size + sample_header_size as usize;
++        if name_table_size > 0 && name_table_start <= data.len() {
++            let name_table_end = name_table_start.saturating_add(name_table_size as usize);
++            for (index, sample) in samples.iter_mut().enumerate() {
++                let offset_pos = name_table_start + index * 4;
++                let Ok(relative) = read_u32(data, offset_pos, "name offset") else {
++                    break;
++                };
++                let start = name_table_start.saturating_add(relative as usize);
++                if start >= data.len() || start >= name_table_end {
++                    continue;
++                }
++                let limit = name_table_end.min(data.len());
++                let end = data[start..limit]
++                    .iter()
++                    .position(|&byte| byte == 0)
++                    .map(|position| start + position)
++                    .unwrap_or(limit);
++                if let Ok(name) = std::str::from_utf8(&data[start..end]) {
++                    sample.name = name.to_string();
++                }
++            }
++        }
++
++        // ---- sample data ----------------------------------------------------
++        let data_section_offset =
++            header_size + sample_header_size as usize + name_table_size as usize;
++
++        Ok(Fsb5 {
++            version,
++            num_samples: sample_count,
++            sample_header_size,
++            name_table_size,
++            data_size,
++            format,
++            header_size,
++            data_section_offset,
++            samples,
++            header_zero,
++            header_hash,
++            header_dummy,
++            data: data.to_vec(),
++        })
++    }
++
++    /// Parse a bank from a file on disk.
++    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, FsbOpenError> {
++        let bytes = std::fs::read(path.as_ref()).map_err(FsbOpenError::Io)?;
++        Fsb5::parse(&bytes).map_err(FsbOpenError::Parse)
++    }
++
++    /// Number of samples in the bank.
++    pub fn len(&self) -> usize {
++        self.samples.len()
++    }
++
++    /// Whether the bank contains no samples.
++    pub fn is_empty(&self) -> bool {
++        self.samples.is_empty()
++    }
++
++    /// Look up a sample by index.
++    pub fn sample(&self, index: usize) -> Option<&Sample> {
++        self.samples.get(index)
++    }
++
++    /// Extract the raw (still encoded) bytes for a sample.
++    ///
++    /// For Vorbis/Mpeg banks the bytes are the compressed bitstream; for PCM
++    /// banks they are interleaved little-endian samples.
++    pub fn sample_data(&self, index: usize) -> Option<&[u8]> {
++        let sample = self.samples.get(index)?;
++        let start = self.data_section_offset + sample.data_offset as usize;
++        let end = self
++            .samples
++            .get(index + 1)
++            .map(|next| self.data_section_offset + next.data_offset as usize)
++            .unwrap_or(self.data_section_offset + self.data_size as usize);
++        if start > end || end > self.data.len() {
++            return None;
++        }
++        Some(&self.data[start..end])
++    }
++
++    /// Iterate the Vorbis packets of a sample in a `VORBIS` bank.
++    ///
++    /// Returns `None` when the bank is not Vorbis-encoded or the sample has no
++    /// data. Decoding the payloads additionally requires the setup header
++    /// identified by [`Sample::vorbis_data`], which is stored inside the bank.
++    pub fn vorbis_packets(&self, index: usize) -> Option<VorbisPacketIter<'_>> {
++        if self.format != SoundFormat::Vorbis {
++            return None;
++        }
++        let data = self.sample_data(index)?;
++        Some(VorbisPacketIter {
++            data,
++            cursor: 0,
++            done: false,
++        })
++    }
++
++    /// Convert a PCM sample into a canonical RIFF/WAVE file.
++    ///
++    /// Returns `None` for compressed formats (`Vorbis`, `Mpeg`, ADPCM, …),
++    /// which require a dedicated decoder. The sample data is written verbatim,
++    /// matching the reference layout (little-endian, signed for 16/24/32-bit).
++    pub fn sample_to_wav(&self, index: usize) -> Option<Vec<u8>> {
++        let sample = self.samples.get(index)?;
++        let data = self.sample_data(index)?;
++        let (bits, format_tag) = match self.format {
++            SoundFormat::Pcm8 => (8u16, 1u16),
++            SoundFormat::Pcm16 => (16, 1),
++            SoundFormat::Pcm24 => (24, 1),
++            SoundFormat::Pcm32 => (32, 1),
++            SoundFormat::PcmFloat => (32, 3),
++            _ => return None,
++        };
++        let channels = sample.channels.max(1) as u16;
++        let block_align = channels * bits / 8;
++        let byte_rate = sample.frequency.saturating_mul(block_align as u32);
++
++        let mut out = Vec::with_capacity(44 + data.len());
++        out.extend_from_slice(b"RIFF");
++        out.extend_from_slice(&(36u32 + data.len() as u32).to_le_bytes());
++        out.extend_from_slice(b"WAVE");
++        out.extend_from_slice(b"fmt ");
++        out.extend_from_slice(&16u32.to_le_bytes());
++        out.extend_from_slice(&format_tag.to_le_bytes());
++        out.extend_from_slice(&channels.to_le_bytes());
++        out.extend_from_slice(&sample.frequency.to_le_bytes());
++        out.extend_from_slice(&byte_rate.to_le_bytes());
++        out.extend_from_slice(&block_align.to_le_bytes());
++        out.extend_from_slice(&bits.to_le_bytes());
++        out.extend_from_slice(b"data");
++        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
++        out.extend_from_slice(data);
++        Some(out)
++    }
++
++    /// The complete bank bytes backing this value.
++    pub fn raw_bytes(&self) -> &[u8] {
++        &self.data
++    }
++
++    /// Raw 8-byte `zero` header field, preserved for faithful re-serialisation.
++    pub fn header_zero(&self) -> [u8; 8] {
++        self.header_zero
++    }
++
++    /// Raw 16-byte `hash` header field, preserved for faithful re-serialisation.
++    pub fn header_hash(&self) -> [u8; 16] {
++        self.header_hash
++    }
++
++    /// Raw 8-byte `dummy` header field, preserved for faithful re-serialisation.
++    pub fn header_dummy(&self) -> [u8; 8] {
++        self.header_dummy
++    }
++
++    /// The metadata chunks of a sample that the writer does not derive itself
++    /// (everything except `CHANNELS`, `FREQUENCY` and `LOOP`).
++    pub fn preserved_chunks(&self, index: usize) -> Vec<(u32, Vec<u8>)> {
++        let Some(sample) = self.samples.get(index) else {
++            return Vec::new();
++        };
++        sample
++            .chunks
++            .iter()
++            .filter(|chunk| {
++                !matches!(
++                    chunk.kind,
++                    ChunkType::Channels | ChunkType::Frequency | ChunkType::Loop
++                )
++            })
++            .map(|chunk| (chunk.kind.as_u32(), chunk.data.clone()))
++            .collect()
++    }
++}
++
++/// Convenience error combining I/O and parse failures.
++#[derive(Debug)]
++pub enum FsbOpenError {
++    /// The file could not be read.
++    Io(std::io::Error),
++    /// The file was read but is not a valid FSB5 bank.
++    Parse(FsbError),
++}
++
++impl fmt::Display for FsbOpenError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            FsbOpenError::Io(error) => write!(f, "could not read bank: {error}"),
++            FsbOpenError::Parse(error) => write!(f, "could not parse bank: {error}"),
++        }
++    }
++}
++
++impl std::error::Error for FsbOpenError {}
++
++/// Update a sample with a decoded metadata chunk.
++fn apply_chunk(sample: &mut Sample, tag: u32, payload: &[u8]) {
++    match tag {
++        1 if !payload.is_empty() => sample.channels = payload[0] as u32,
++        2 if payload.len() >= 4 => {
++            sample.frequency = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
++        }
++        3 if payload.len() >= 8 => {
++            sample.loop_start = Some(u32::from_le_bytes([
++                payload[0], payload[1], payload[2], payload[3],
++            ]));
++            sample.loop_end = Some(u32::from_le_bytes([
++                payload[4], payload[5], payload[6], payload[7],
++            ]));
++        }
++        _ => {}
++    }
++}
++
++/// Map a 4-bit frequency index to a sample rate.
++pub fn frequency_from_index(index: u32) -> Option<u32> {
++    match index {
++        1 => Some(8_000),
++        2 => Some(11_000),
++        3 => Some(11_025),
++        4 => Some(16_000),
++        5 => Some(22_050),
++        6 => Some(24_000),
++        7 => Some(32_000),
++        8 => Some(44_100),
++        9 => Some(48_000),
++        _ => None,
++    }
++}
++
++/// Extract `len` bits starting at `start` from a little-endian bit field.
++fn bits(value: u64, start: u32, len: u32) -> u64 {
++    let stop = start + len;
++    let mask = if stop >= 64 {
++        u64::MAX
++    } else {
++        (1u64 << stop) - 1
++    };
++    (value & mask) >> start
++}
++
++fn read_bytes<'a>(
++    data: &'a [u8],
++    offset: usize,
++    len: usize,
++    context: &'static str,
++) -> Result<&'a [u8], FsbError> {
++    let end = offset
++        .checked_add(len)
++        .ok_or(FsbError::Truncated { context, offset })?;
++    data.get(offset..end)
++        .ok_or(FsbError::Truncated { context, offset })
++}
++
++fn read_u32(data: &[u8], offset: usize, context: &'static str) -> Result<u32, FsbError> {
++    let bytes = read_bytes(data, offset, 4, context)?;
++    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
++}
++
++fn read_u64(data: &[u8], offset: usize, context: &'static str) -> Result<u64, FsbError> {
++    let bytes = read_bytes(data, offset, 8, context)?;
++    let mut array = [0u8; 8];
++    array.copy_from_slice(bytes);
++    Ok(u64::from_le_bytes(array))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// Build a synthetic single-sample PCM16 FSB5 bank.
++    fn synthetic_bank() -> Vec<u8> {
++        let mut file = Vec::new();
++        // header
++        file.extend_from_slice(b"FSB5");
++        file.extend_from_slice(&1u32.to_le_bytes()); // version
++        file.extend_from_slice(&1u32.to_le_bytes()); // numSamples
++        file.extend_from_slice(&8u32.to_le_bytes()); // sampleHeaderSize
++        file.extend_from_slice(&9u32.to_le_bytes()); // nameTableSize
++        file.extend_from_slice(&8u32.to_le_bytes()); // dataSize
++        file.extend_from_slice(&2u32.to_le_bytes()); // mode = PCM16
++        file.extend_from_slice(&[0u8; 8]); // zero
++        file.extend_from_slice(&[0u8; 16]); // hash
++        file.extend_from_slice(&[0u8; 8]); // dummy
++        assert_eq!(file.len(), FSB5_HEADER_SIZE);
++
++        // sample header: extraParams=0, freq index=8 (44100), channels=1, offset=0, frames=4
++        let raw: u64 = (8u64 << 1) | (4u64 << 34);
++        file.extend_from_slice(&raw.to_le_bytes());
++
++        // name table: offset[0]=4 then "beep\0"
++        file.extend_from_slice(&4u32.to_le_bytes());
++        file.extend_from_slice(b"beep\0");
++
++        // data: 4 frames * 1 channel * 2 bytes
++        file.extend_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]);
++        file
++    }
++
++    #[test]
++    fn parses_header_and_sample() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        assert_eq!(bank.version, 1);
++        assert_eq!(bank.num_samples, 1);
++        assert_eq!(bank.format, SoundFormat::Pcm16);
++        assert_eq!(bank.len(), 1);
++
++        let sample = &bank.samples[0];
++        assert_eq!(sample.name, "beep");
++        assert_eq!(sample.frequency, 44_100);
++        assert_eq!(sample.channels, 1);
++        assert_eq!(sample.num_frames, 4);
++        assert_eq!(sample.data_offset, 0);
++        assert!(!sample.is_looped());
++    }
++
++    #[test]
++    fn extracts_sample_data() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        let data = bank.sample_data(0).expect("sample data");
++        assert_eq!(data, &[1, 2, 3, 4, 5, 6, 7, 8]);
++    }
++
++    #[test]
++    fn rejects_non_fsb5() {
++        let error = Fsb5::parse(b"NOPE....").unwrap_err();
++        assert_eq!(error, FsbError::BadMagic(*b"NOPE"));
++    }
++
++    #[test]
++    fn rejects_short_buffer() {
++        assert!(matches!(
++            Fsb5::parse(b"FSB"),
++            Err(FsbError::TooShort { .. })
++        ));
++    }
++
++    #[test]
++    fn bit_extraction_matches_template() {
++        // A 4-bit frequency index of 8 lives in bits [1..5).
++        assert_eq!(bits(8u64 << 1, 1, 4), 8);
++        // top 30-bit field
++        assert_eq!(bits(0xFFFF_FFFF_0000_0000, 34, 30), 0x3FFF_FFFF);
++        // low bit
++        assert_eq!(bits(1, 0, 1), 1);
++        assert_eq!(bits(0, 0, 1), 0);
++    }
++
++    #[test]
++    fn frequency_index_lookup() {
++        assert_eq!(frequency_from_index(8), Some(44_100));
++        assert_eq!(frequency_from_index(0), None);
++        assert_eq!(frequency_from_index(15), None);
++    }
++
++    /// Build a synthetic single-sample VORBIS FSB5 bank with one audio packet.
++    fn synthetic_vorbis_bank() -> Vec<u8> {
++        let mut file = Vec::new();
++        file.extend_from_slice(b"FSB5");
++        file.extend_from_slice(&1u32.to_le_bytes()); // version
++        file.extend_from_slice(&1u32.to_le_bytes()); // numSamples
++                                                     // sampleHeaderSize = 8 (fixed) + 4 (chunk header) + 12 (crc32 + seek entry)
++        file.extend_from_slice(&24u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes()); // nameTableSize
++        file.extend_from_slice(&6u32.to_le_bytes()); // dataSize
++        file.extend_from_slice(&15u32.to_le_bytes()); // mode = VORBIS
++        file.extend_from_slice(&[0u8; 8]);
++        file.extend_from_slice(&[0u8; 16]);
++        file.extend_from_slice(&[0u8; 8]);
++        assert_eq!(file.len(), FSB5_HEADER_SIZE);
++
++        // sample header: extraParams=1, freq index=8 (44100), channels=1, offset=0
++        let raw: u64 = 1 | (8u64 << 1);
++        file.extend_from_slice(&raw.to_le_bytes());
++
++        // metadata chunk: next=0, size=12, type=VORBISDATA(11)
++        let chunk: u32 = (12u32 << 1) | (11u32 << 25);
++        file.extend_from_slice(&chunk.to_le_bytes());
++        // VORBISDATA: crc32 + one seek entry (offset, granule)
++        file.extend_from_slice(&118_203_318u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes());
++
++        // data: one packet (size=2, payload 0xAA 0xBB) then terminator
++        file.extend_from_slice(&[0x02, 0x00, 0xAA, 0xBB, 0x00, 0x00]);
++        file
++    }
++
++    #[test]
++    fn parses_vorbis_bank_and_packets() {
++        let bank = Fsb5::parse(&synthetic_vorbis_bank()).expect("bank parses");
++        assert_eq!(bank.format, SoundFormat::Vorbis);
++        assert_eq!(bank.format.file_extension(), "ogg");
++
++        let sample = &bank.samples[0];
++        assert!(sample.has_extra_params);
++        assert_eq!(sample.frequency, 44_100);
++        assert_eq!(sample.channels, 1);
++
++        let vorbis = sample.vorbis_data().expect("vorbis data");
++        assert_eq!(vorbis.setup_crc32, 118_203_318);
++        assert_eq!(vorbis.seek_table, vec![(0, 0)]);
++
++        let packets: Vec<_> = bank.vorbis_packets(0).expect("vorbis packets").collect();
++        assert_eq!(packets.len(), 1);
++        assert!(packets[0].is_audio());
++        assert_eq!(packets[0].data, &[0xAA, 0xBB]);
++    }
++
++    #[test]
++    fn vorbis_packets_none_for_pcm_bank() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        assert!(bank.vorbis_packets(0).is_none());
++    }
++
++    #[test]
++    fn exports_pcm_sample_to_wav() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        let wav = bank.sample_to_wav(0).expect("wav export");
++
++        assert_eq!(&wav[0..4], b"RIFF");
++        assert_eq!(&wav[8..12], b"WAVE");
++        assert_eq!(&wav[12..16], b"fmt ");
++        // audio_format = PCM(1), channels = 1, sample_rate = 44100, bits = 16
++        assert_eq!(u16::from_le_bytes([wav[20], wav[21]]), 1);
++        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
++        assert_eq!(
++            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
++            44_100
++        );
++        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
++        assert_eq!(&wav[36..40], b"data");
++        assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 8);
++        assert_eq!(&wav[44..], &[1, 2, 3, 4, 5, 6, 7, 8]);
++    }
++
++    #[test]
++    fn wav_export_rejects_vorbis() {
++        let bank = Fsb5::parse(&synthetic_vorbis_bank()).expect("bank parses");
++        assert!(bank.sample_to_wav(0).is_none());
++    }
++}
+diff --git a/renzora_plugin/Cargo.toml b/renzora_plugin/Cargo.toml
+index 5d485e2..c0f530a 100644
+--- a/renzora_plugin/Cargo.toml
++++ b/renzora_plugin/Cargo.toml
+@@ -28,13 +28,13 @@ crate-type = ["dylib"]
+ path = "src/lib.rs"
+ 
+ [dependencies]
+-bevy = "0.19"
++bevy = "0.20"
+ # Path for rust-analyzer when this folder sits next to an engine checkout.
+ # Marketplace / SDK builds strip bevy+renzora* and use the staged contract crate.
+ renzora = { path = "../../engine/crates/renzora" }
+-# RaMOD Bevy plugin (Bevy 0.19 + feature renzora). Resolved as a third-party
++# RaMOD Bevy plugin (Bevy 0.20 + feature renzora). Resolved as a third-party
+ # crate by the Renzora plugin builder (Bevy stripped from its graph).
+-bevy_ramod = { git = "https://github.com/SimonTek27/RaMOD", features = ["renzora"] }
++bevy_ramod = { path = "../bevy_ramod", features = ["renzora"] }
+ 
+ # Marketplace listing (`renzora publish`). Cargo ignores this section.
+ [package.metadata.renzora]
+diff --git a/runtime/src/backend.rs b/runtime/src/backend.rs
+index d328c43..72f398c 100644
+--- a/runtime/src/backend.rs
++++ b/runtime/src/backend.rs
+@@ -7,7 +7,7 @@ use crate::error::RuntimeError;
+ use crate::RuntimeConfig;
+ 
+ /// Trait for device output (cpal or null).
+-pub trait OutputBackend: Send {
++pub trait OutputBackend: Send + Sync {
+     fn sample_rate(&self) -> u32;
+     fn channels(&self) -> u16;
+     /// Push interleaved samples into the device ring (no-op for null).
+@@ -75,9 +75,11 @@ mod cpal_backend {
+         _stream: cpal::Stream,
+     }
+ 
+-    // cpal::Stream is !Send on some platforms due to phantom; the stream is only
+-    // owned by this backend and never shared across threads after construction.
++    // cpal::Stream is !Send/!Sync on some platforms due to phantom data; the stream
++    // is owned by this backend and only ever written from the audio callback, while
++    // the shared ring is behind a Mutex.
+     unsafe impl Send for CpalBackend {}
++    unsafe impl Sync for CpalBackend {}
+ 
+     impl OutputBackend for CpalBackend {
+         fn sample_rate(&self) -> u32 {
+diff --git a/runtime/src/bank.rs b/runtime/src/bank.rs
+index b748a8f..45ef4ce 100644
+--- a/runtime/src/bank.rs
++++ b/runtime/src/bank.rs
+@@ -19,6 +19,12 @@ impl BankName {
+     }
+ }
+ 
++impl Default for BankName {
++    fn default() -> Self {
++        Self(String::new())
++    }
++}
++
+ /// One entry registered into the runtime event system.
+ #[derive(Debug, Clone)]
+ pub struct BankEventSpec {
+diff --git a/runtime/src/live_update.rs b/runtime/src/live_update.rs
+index 22b07d7..8f7972e 100644
+--- a/runtime/src/live_update.rs
++++ b/runtime/src/live_update.rs
+@@ -57,7 +57,7 @@ impl LiveUpdateServer {
+                         .set_read_timeout(Some(Duration::from_millis(1)))
+                         .ok();
+                     let mut stream_write = stream.try_clone().map_err(|e| e.to_string())?;
+-                    let welcome = r#{"cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#;
++                    let welcome = r#""cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#;
+                     let _ = writeln!(stream_write, "{welcome}");
+                     let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+                     self.clients.push(ClientConn {
+@@ -115,10 +115,10 @@ fn handle_line(rt: &mut Runtime, line: &str) -> Option<String> {
+     let cmd = json_str(line, "cmd").unwrap_or("");
+     match cmd {
+         "hello" => Some(
+-            r#{"cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#
++            r#""cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#
+                 .into(),
+         ),
+-        "ping" => Some(r#{"cmd":"pong"}"#.into()),
++        "ping" => Some(r#""cmd":"pong"}"#.into()),
+         "set_param" => {
+             let event = json_str(line, "event").unwrap_or("");
+             let name = json_str(line, "name").unwrap_or("");
+diff --git a/runtime/src/mixer.rs b/runtime/src/mixer.rs
+index 6c5e59a..c57ec22 100644
+--- a/runtime/src/mixer.rs
++++ b/runtime/src/mixer.rs
+@@ -555,7 +555,7 @@ impl SnapshotPlayer {
+     }
+ 
+     pub fn active_name(&self) -> Option<&str> {
+-        self.active.as_ref().map(|(n)| n.as_str())
++        self.active.as_ref().map(|(n, _)| n.as_str())
+     }
+ 
+     pub fn active_weight(&self) -> f32 {
+diff --git a/runtime/src/profiler.rs b/runtime/src/profiler.rs
+index e22608c..ef4a65d 100644
+--- a/runtime/src/profiler.rs
++++ b/runtime/src/profiler.rs
+@@ -111,8 +111,7 @@ impl ProfilerSession {
+         let mut out = String::new();
+         for f in &self.frames {
+             out.push_str(&frame_to_json(f));
+-            out.push('
+-');
++            out.push('\n');
+         }
+         out
+     }
+diff --git a/runtime/src/runtime_core_a.rs b/runtime/src/runtime_core_a.rs
+index eaf6044..d25f417 100644
+--- a/runtime/src/runtime_core_a.rs
++++ b/runtime/src/runtime_core_a.rs
+@@ -1,11 +1,7 @@
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+-use bank::BankRegistry;
+ use buffer::BufferStore;
+-use designer::DesignedEvent;
+ use event::EventSystem;
+-use mixer::{Mixer, Snapshot, SnapshotPlayer};
+-use spatial::{closing_speed, distance, Attributes3d as Attr3d};
+ use voice::VoicePool;
+ 
+ pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+@@ -332,3 +328,4 @@ impl Runtime {
+         self.sync_event_spatial_gains();
+         self.snapshots.apply(&mut self.mixer);
+     }
++}
+diff --git a/runtime/src/runtime_core_b.rs b/runtime/src/runtime_core_b.rs
+index c54551b..bf76961 100644
+--- a/runtime/src/runtime_core_b.rs
++++ b/runtime/src/runtime_core_b.rs
+@@ -1 +1,333 @@
+-PLACEHOLDER_CORE_B
+\ No newline at end of file
++impl Runtime {
++    pub fn render(&mut self, out: &mut [f32]) {
++        let t0 = std::time::Instant::now();
++        self.sync_event_spatial_gains();
++        self.snapshots.apply(&mut self.mixer);
++        let ch = self.channels as usize;
++        if ch == 0 || out.len() % ch != 0 {
++            out.fill(0.0);
++            return;
++        }
++        let frames = out.len() / ch;
++        self.mixer.prepare(frames, ch);
++        {
++            let mixer = &mut self.mixer;
++            let rate = self.sample_rate;
++            let buffers = &self.buffers;
++            self.voices.mix_each(frames, ch, rate, buffers, |voice_id, slice| {
++                mixer.accumulate_voice(voice_id, slice);
++            });
++        }
++        self.mixer.finish(out, ch, self.sample_rate);
++        let g = self.master.gain();
++        if (g - 1.0).abs() > f32::EPSILON {
++            for s in out.iter_mut() {
++                *s *= g;
++            }
++        }
++        self.last_render_us = t0.elapsed().as_micros().min(u128::from(u32::MAX)) as u32;
++        self.spectrum.analyze(out, ch);
++        self.capture_profiler_frame();
++        if let Some(ref backend) = self.backend {
++            backend.push_samples(out);
++        }
++    }
++
++    pub fn profiler_enable(&mut self, on: bool) {
++        self.profiler.enable(on);
++    }
++    pub fn profiler_clear(&mut self) {
++        self.profiler.clear();
++    }
++    pub fn profiler_session(&self) -> &crate::profiler::ProfilerSession {
++        &self.profiler
++    }
++    pub fn profiler_latest(&self) -> Option<&crate::profiler::ProfilerFrame> {
++        self.profiler.latest()
++    }
++    pub fn spectrum(&self) -> &crate::profiler::SpectrumAnalyzer {
++        &self.spectrum
++    }
++    pub fn last_render_cpu_us(&self) -> u32 {
++        self.last_render_us
++    }
++
++    fn capture_profiler_frame(&mut self) {
++        if !self.profiler.is_enabled() {
++            return;
++        }
++        let master = self.mixer.master_id();
++        let (peak, rms) = self
++            .mixer
++            .bus(master)
++            .map(|b| (b.meter.peak, b.meter.rms))
++            .unwrap_or((0.0, 0.0));
++        let mut playing_events = Vec::new();
++        let mut params = Vec::new();
++        let mut emitters = Vec::new();
++        for id in 1..1024u64 {
++            let Some(inst) = self.events.instance(id) else {
++                continue;
++            };
++            if !inst.is_playing() && !inst.started {
++                continue;
++            }
++            let path = inst.path().as_str().to_string();
++            playing_events.push(path.clone());
++            if let Some(v) = inst.get_parameter("Intensity") {
++                params.push((path.clone(), "Intensity".into(), v));
++            }
++            if inst.is_3d {
++                let a = inst.attributes();
++                let listener = self.events.listener();
++                let d = crate::spatial::distance(&listener, &a);
++                let aud = inst.attenuation.gain_at(d) * inst.gain_user;
++                emitters.push(crate::profiler::EmitterDebug {
++                    position: a.position,
++                    velocity: a.velocity,
++                    audibility: aud,
++                });
++            }
++        }
++        if playing_events.len() > 16 {
++            playing_events.truncate(16);
++        }
++        self.profiler.push(crate::profiler::ProfilerFrame {
++            index: 0,
++            time: 0.0,
++            cpu_render_us: self.last_render_us,
++            active_voices: self.voices.active_count(),
++            active_instances: self.events.instance_count(),
++            master_peak: peak,
++            master_rms: rms,
++            playing_events,
++            params,
++            emitters,
++        });
++    }
++
++    pub fn render_seconds(&mut self, seconds: f32) -> Vec<f32> {
++        let frames = (seconds * self.sample_rate as f32).max(0.0) as usize;
++        let mut out = vec![0.0f32; frames * self.channels as usize];
++        self.render(&mut out);
++        out
++    }
++
++    pub fn register_event(&mut self, desc: EventDescription) {
++        self.events.register(desc);
++    }
++
++    pub fn register_designed_event(
++        &mut self,
++        event: DesignedEvent,
++        buffers: &[BufferHandle],
++    ) -> Result<(), RuntimeError> {
++        let primary = event
++            .tracks
++            .iter()
++            .flat_map(|t| t.instruments.iter())
++            .find(|i| !i.buffer_slots.is_empty())
++            .and_then(|i| i.buffer_slots.first().copied())
++            .and_then(|slot| buffers.get(slot).copied())
++            .ok_or(RuntimeError::InvalidBuffer)?;
++        let mut desc = EventDescription::new(&event.path, primary)
++            .with_priority(event.priority)
++            .with_loop(
++                event
++                    .tracks
++                    .iter()
++                    .flat_map(|t| t.instruments.iter())
++                    .any(|i| i.looping),
++            )
++            .with_output_bus(event.output_bus.clone());
++        if event.is_3d {
++            desc = desc.with_3d(event.attenuation);
++        }
++        self.events.register(desc);
++        let handles: Vec<BufferHandle> = event
++            .tracks
++            .iter()
++            .flat_map(|t| t.instruments.iter())
++            .flat_map(|i| i.buffer_slots.iter().copied())
++            .filter_map(|slot| buffers.get(slot).copied())
++            .collect();
++        self.designed_buffers.insert(event.path.clone(), handles);
++        self.designed.push(event);
++        Ok(())
++    }
++
++    /// Live event-instance count (also used by the Live Update server).
++    pub fn instance_count(&self) -> usize {
++        self.events.instance_count()
++    }
++
++    /// Start an event by path, wiring it to a voice and its output bus.
++    pub fn play_event(&mut self, path: &str) -> Result<u64, RuntimeError> {
++        let desc = self
++            .events
++            .get_description(path)
++            .ok_or(RuntimeError::EventNotFound)?
++            .clone();
++        let bus = self
++            .mixer
++            .find_by_name(&desc.output_bus)
++            .unwrap_or_else(|| self.mixer.default_bus());
++        let buffer = desc.buffer;
++        let params = PlayParams {
++            gain: 1.0,
++            looped: desc.looping,
++        };
++        let priority = desc.priority;
++        let id = self
++            .events
++            .create_instance(path)
++            .ok_or(RuntimeError::EventNotFound)?;
++        let audibility = {
++            let inst = self.events.instance(id).ok_or(RuntimeError::EventNotFound)?;
++            let d = crate::spatial::distance(&self.events.listener(), &inst.attributes);
++            inst.attenuation.gain_at(d) * inst.gain_user
++        };
++        self.current_output_bus = Some(bus);
++        let played = self.play_with_priority(buffer, params, priority, audibility, None);
++        self.current_output_bus = None;
++        let handle = match played {
++            Ok(h) => h,
++            Err(e) => {
++                self.events.release_instance(id);
++                return Err(e);
++            }
++        };
++        if let Some(inst) = self.events.instance_mut(id) {
++            inst.voice = Some(handle);
++            inst.started = true;
++        }
++        Ok(id)
++    }
++
++    /// Stop an instance and any voice attached to it.
++    pub fn release_instance(&mut self, id: u64) {
++        if let Some(inst) = self.events.release_instance(id) {
++            if let Some(handle) = inst.voice {
++                self.voices.stop(handle);
++            }
++        }
++    }
++
++    /// Move the 3D listener (camera / player).
++    pub fn set_listener(&mut self, attributes: Attributes3d) {
++        self.events.set_listener(attributes);
++    }
++
++    /// Move a 3D emitter; 3D gain/Doppler follow on the next render.
++    pub fn set_instance_3d(&mut self, id: u64, attributes: Attributes3d) {
++        if let Some(inst) = self.events.instance_mut(id) {
++            inst.set_3d(attributes);
++        }
++    }
++
++    /// Recompute per-voice gain and Doppler pitch from listener/emitter geometry.
++    pub fn sync_event_spatial_gains(&mut self) {
++        let listener = self.events.listener();
++        let mut updates: Vec<(VoiceHandle, f32, f32)> = Vec::new();
++        for inst in self.events.instances_mut() {
++            let Some(handle) = inst.voice else { continue };
++            if !inst.started {
++                continue;
++            }
++            let (gain, pitch) = if inst.is_3d {
++                let d = crate::spatial::distance(&listener, &inst.attributes);
++                let cs = crate::spatial::closing_speed(&listener, &inst.attributes);
++                (
++                    inst.attenuation.gain_at(d) * inst.gain_user,
++                    crate::spatial::doppler_pitch(cs),
++                )
++            } else {
++                (inst.gain_user, 1.0)
++            };
++            updates.push((handle, gain, pitch));
++        }
++        for (handle, gain, pitch) in updates {
++            self.voices.set_gain(handle, gain.max(0.0));
++            self.voices.set_pitch(handle, pitch.clamp(0.25, 4.0));
++        }
++    }
++
++    /// Set a named parameter on one live instance.
++    pub fn set_instance_parameter(&mut self, id: u64, name: &str, value: f32) -> bool {
++        self.events
++            .instance_mut(id)
++            .map(|i| i.set_parameter(name, value))
++            .unwrap_or(false)
++    }
++
++    pub fn set_bus_volume_db(&mut self, id: BusId, db: f32) {
++        self.mixer.set_volume_db(id, db);
++    }
++
++    pub fn set_bus_mute(&mut self, id: BusId, mute: bool) {
++        self.mixer.set_mute(id, mute);
++    }
++
++    pub fn set_bus_solo(&mut self, id: BusId, solo: bool) {
++        self.mixer.set_solo(id, solo);
++    }
++
++    /// Trigger a named snapshot, capturing current levels as its base.
++    pub fn trigger_snapshot(&mut self, name: &str, weight: f32) {
++        self.snapshots.capture_base(&self.mixer);
++        self.snapshots.trigger(name, weight);
++    }
++
++    pub fn clear_snapshot(&mut self) {
++        self.snapshots.clear();
++    }
++}
++
++#[cfg(test)]
++mod reconstruction_tests {
++    use super::*;
++
++    fn headless() -> Runtime {
++        Runtime::new(RuntimeConfig {
++            sample_rate: 48_000,
++            channels: 2,
++            max_voices: 8,
++            open_device: false,
++        })
++        .expect("headless runtime")
++    }
++
++    #[test]
++    fn play_event_creates_instance_and_voice() {
++        let mut r = headless();
++        let buf = r.load_pcm(vec![0.25; 4_800], 1, 48_000).expect("pcm");
++        r.register_event(EventDescription::new("event:/sfx/test", buf));
++        let id = r.play_event("event:/sfx/test").expect("play");
++        assert_eq!(r.instance_count(), 1);
++        assert_eq!(r.active_voices(), 1);
++        assert!(r.set_instance_parameter(id, "Intensity", 0.5));
++        r.release_instance(id);
++        assert_eq!(r.instance_count(), 0);
++    }
++
++    #[test]
++    fn unknown_event_reports_error_and_leaves_no_instance() {
++        let mut r = headless();
++        assert!(r.play_event("event:/nope").is_err());
++        assert_eq!(r.instance_count(), 0);
++    }
++
++    #[test]
++    fn render_emits_audible_samples_for_active_event() {
++        let mut r = headless();
++        let buf = r.load_pcm(vec![0.5; 4_800], 1, 48_000).expect("pcm");
++        r.register_event(EventDescription::new("event:/sfx/loop", buf));
++        r.play_event("event:/sfx/loop").expect("play");
++        let out = r.render_seconds(0.01);
++        assert_eq!(out.len(), 480 * 2);
++        assert!(
++            out.iter().any(|s| s.abs() > 0.0),
++            "expected audible samples from the reconstructed render path"
++        );
++    }
++}
+diff --git a/src/fsb.rs b/src/fsb.rs
+index f056180..2a71ed1 100644
+--- a/src/fsb.rs
++++ b/src/fsb.rs
+@@ -1 +1,1011 @@
+-PLACEHOLDER_FSB
+\ No newline at end of file
++//! FSB5 sound-bank container parsing.
++//!
++//! This module parses the FSB5 container that content-authoring tools use to
++//! package audio samples for their event banks (`.fsb`). It is the foundation
++//! of the RaMOD audio middleware: once samples and their metadata are decoded,
++//! the modding suite can list, extract, replace and re-encode bank contents.
++//!
++//! The layout implemented here was cross-checked against the REA analysis of
++//! the `libfsbvorbis64.dll` shipped with a stock authoring tool and the publicly
++//! documented FSB5 binary template. Field names mirror that template so the
++//! code stays traceable to the reverse-engineered source.
++//!
++//! FSB5 header (little-endian):
++//! ```text
++//! 0x00 char[4]  magic = "FSB5"
++//! 0x04 u32      version
++//! 0x08 u32      num_samples
++//! 0x0C u32      sample_header_size   (total size of the sample-header region)
++//! 0x10 u32      name_table_size
++//! 0x14 u32      data_size
++//! 0x18 u32      mode                (sound format)
++//! 0x1C u8[8]    zero
++//! 0x24 u8[16]   hash
++//! 0x34 u8[8]    dummy
++//! 0x3C u32      unknown             (only when version == 0)
++//! ```
++
++use std::fmt;
++
++/// Magic bytes at the start of every FSB5 bank.
++pub const FSB5_MAGIC: [u8; 4] = *b"FSB5";
++
++/// Number of bytes occupied by the FSB5 header for version 1 (and later).
++pub const FSB5_HEADER_SIZE: usize = 60;
++
++/// Number of bytes occupied by the FSB5 header for version 0.
++pub const FSB5_HEADER_SIZE_V0: usize = 64;
++
++/// Errors produced while parsing an FSB5 container.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum FsbError {
++    /// The buffer is smaller than the structure being read.
++    TooShort { needed: usize, got: usize },
++    /// The first four bytes are not `FSB5`.
++    BadMagic([u8; 4]),
++    /// A read ran past the end of the buffer.
++    Truncated {
++        context: &'static str,
++        offset: usize,
++    },
++    /// The declared number of samples cannot fit in the buffer.
++    SampleCountTooLarge {
++        samples: u32,
++        available_bytes: usize,
++    },
++}
++
++impl fmt::Display for FsbError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            FsbError::TooShort { needed, got } => {
++                write!(f, "buffer too short: needed {needed} bytes, got {got}")
++            }
++            FsbError::BadMagic(magic) => {
++                write!(f, "not an FSB5 bank: magic bytes were {magic:?}")
++            }
++            FsbError::Truncated { context, offset } => {
++                write!(f, "truncated while reading {context} at offset {offset}")
++            }
++            FsbError::SampleCountTooLarge {
++                samples,
++                available_bytes,
++            } => write!(
++                f,
++                "declared {samples} samples but only {available_bytes} bytes are available"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for FsbError {}
++
++/// Audio sample encoding declared by an FSB5 bank.
++///
++/// Values match the `MODE` enum in the FSB5 specification.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum SoundFormat {
++    None,
++    Pcm8,
++    Pcm16,
++    Pcm24,
++    Pcm32,
++    PcmFloat,
++    Gcadpcm,
++    Imaadpcm,
++    Vag,
++    Hevag,
++    Xma,
++    Mpeg,
++    Celt,
++    At9,
++    Xwma,
++    Vorbis,
++    /// A mode value not covered by the specification.
++    Unknown(u32),
++}
++
++impl SoundFormat {
++    /// Decode the on-disk `mode` field.
++    pub fn from_u32(value: u32) -> Self {
++        match value {
++            0 => SoundFormat::None,
++            1 => SoundFormat::Pcm8,
++            2 => SoundFormat::Pcm16,
++            3 => SoundFormat::Pcm24,
++            4 => SoundFormat::Pcm32,
++            5 => SoundFormat::PcmFloat,
++            6 => SoundFormat::Gcadpcm,
++            7 => SoundFormat::Imaadpcm,
++            8 => SoundFormat::Vag,
++            9 => SoundFormat::Hevag,
++            10 => SoundFormat::Xma,
++            11 => SoundFormat::Mpeg,
++            12 => SoundFormat::Celt,
++            13 => SoundFormat::At9,
++            14 => SoundFormat::Xwma,
++            15 => SoundFormat::Vorbis,
++            other => SoundFormat::Unknown(other),
++        }
++    }
++
++    /// Encode back to the on-disk `mode` field.
++    pub fn as_u32(self) -> u32 {
++        match self {
++            SoundFormat::None => 0,
++            SoundFormat::Pcm8 => 1,
++            SoundFormat::Pcm16 => 2,
++            SoundFormat::Pcm24 => 3,
++            SoundFormat::Pcm32 => 4,
++            SoundFormat::PcmFloat => 5,
++            SoundFormat::Gcadpcm => 6,
++            SoundFormat::Imaadpcm => 7,
++            SoundFormat::Vag => 8,
++            SoundFormat::Hevag => 9,
++            SoundFormat::Xma => 10,
++            SoundFormat::Mpeg => 11,
++            SoundFormat::Celt => 12,
++            SoundFormat::At9 => 13,
++            SoundFormat::Xwma => 14,
++            SoundFormat::Vorbis => 15,
++            SoundFormat::Unknown(value) => value,
++        }
++    }
++
++    /// Conventional file extension for extracted sample data.
++    pub fn file_extension(self) -> &'static str {
++        match self {
++            SoundFormat::Mpeg => "mp3",
++            SoundFormat::Vorbis => "ogg",
++            SoundFormat::Pcm8 | SoundFormat::Pcm16 | SoundFormat::Pcm32 => "wav",
++            _ => "bin",
++        }
++    }
++
++    /// Whether the format is uncompressed linear PCM.
++    pub fn is_pcm(self) -> bool {
++        matches!(
++            self,
++            SoundFormat::Pcm8 | SoundFormat::Pcm16 | SoundFormat::Pcm32
++        )
++    }
++
++    /// Bytes per sample for the uncompressed formats, if applicable.
++    pub fn bytes_per_sample(self) -> Option<usize> {
++        match self {
++            SoundFormat::Pcm8 => Some(1),
++            SoundFormat::Pcm16 => Some(2),
++            SoundFormat::Pcm24 => Some(3),
++            SoundFormat::Pcm32 | SoundFormat::PcmFloat => Some(4),
++            _ => None,
++        }
++    }
++}
++
++impl fmt::Display for SoundFormat {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let name = match self {
++            SoundFormat::None => "none",
++            SoundFormat::Pcm8 => "pcm8",
++            SoundFormat::Pcm16 => "pcm16",
++            SoundFormat::Pcm24 => "pcm24",
++            SoundFormat::Pcm32 => "pcm32",
++            SoundFormat::PcmFloat => "pcm_float",
++            SoundFormat::Gcadpcm => "gcadpcm",
++            SoundFormat::Imaadpcm => "imaadpcm",
++            SoundFormat::Vag => "vag",
++            SoundFormat::Hevag => "hevag",
++            SoundFormat::Xma => "xma",
++            SoundFormat::Mpeg => "mpeg",
++            SoundFormat::Celt => "celt",
++            SoundFormat::At9 => "at9",
++            SoundFormat::Xwma => "xwma",
++            SoundFormat::Vorbis => "vorbis",
++            SoundFormat::Unknown(v) => return write!(f, "unknown({v})"),
++        };
++        f.write_str(name)
++    }
++}
++
++/// Type tag for a per-sample metadata chunk.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ChunkType {
++    Channels,
++    Frequency,
++    Loop,
++    XmaSeek,
++    DspCoeff,
++    XwmaData,
++    VorbisData,
++    Unknown(u32),
++}
++
++impl ChunkType {
++    /// Decode the on-disk chunk tag.
++    pub fn from_u32(value: u32) -> Self {
++        match value {
++            1 => ChunkType::Channels,
++            2 => ChunkType::Frequency,
++            3 => ChunkType::Loop,
++            6 => ChunkType::XmaSeek,
++            7 => ChunkType::DspCoeff,
++            10 => ChunkType::XwmaData,
++            11 => ChunkType::VorbisData,
++            other => ChunkType::Unknown(other),
++        }
++    }
++
++    /// Encode the chunk tag back to its on-disk value.
++    pub fn as_u32(self) -> u32 {
++        match self {
++            ChunkType::Channels => 1,
++            ChunkType::Frequency => 2,
++            ChunkType::Loop => 3,
++            ChunkType::XmaSeek => 6,
++            ChunkType::DspCoeff => 7,
++            ChunkType::XwmaData => 10,
++            ChunkType::VorbisData => 11,
++            ChunkType::Unknown(value) => value,
++        }
++    }
++}
++
++impl fmt::Display for ChunkType {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            ChunkType::Channels => f.write_str("channels"),
++            ChunkType::Frequency => f.write_str("frequency"),
++            ChunkType::Loop => f.write_str("loop"),
++            ChunkType::XmaSeek => f.write_str("xma_seek"),
++            ChunkType::DspCoeff => f.write_str("dsp_coeff"),
++            ChunkType::XwmaData => f.write_str("xwma_data"),
++            ChunkType::VorbisData => f.write_str("vorbis_data"),
++            ChunkType::Unknown(v) => write!(f, "unknown({v})"),
++        }
++    }
++}
++
++/// A decoded per-sample metadata chunk.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Chunk {
++    /// Chunk tag.
++    pub kind: ChunkType,
++    /// Raw chunk payload (length matches the size declared on disk).
++    pub data: Vec<u8>,
++}
++
++/// Decoded `VORBISDATA` metadata chunk.
++///
++/// The chunk begins with a CRC32 that keys one of the pre-built Vorbis
++/// setup headers, followed by a seek table of `(offset, granule_position)`
++/// pairs (see the FSB5 binary template). The table may be sparse — a reference
++/// records roughly one entry per second of audio — but each entry's offset
++/// points at the start of a packet in the sample data.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct VorbisData {
++    /// Identifier of the setup header required to decode the stream.
++    pub setup_crc32: u32,
++    /// Seek table entries: byte offset into the sample data plus granule position.
++    pub seek_table: Vec<(u32, u32)>,
++}
++
++/// One Vorbis packet stored inside an FSB5 `VORBIS` sample.
++///
++/// Packets are serialised as a little-endian `u16` length followed by exactly
++/// that many Vorbis packet bytes; a length of zero terminates the stream.
++///
++/// There is no separate flags byte: the first bit of the payload is Vorbis'
++/// own audio/header discriminator (it is zero for audio packets), so all
++/// `size` bytes belong to the packet. This matches both the reference output and
++/// the bundled reference decoder (`reference/reference_vorbis.py`).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct VorbisPacket<'a> {
++    /// Packet payload, without the length prefix.
++    pub data: &'a [u8],
++}
++
++impl<'a> VorbisPacket<'a> {
++    /// Whether this is an audio packet.
++    ///
++    /// Vorbis audio packets begin with a zero bit, so every packet in an FSB5
++    /// stream is normally an audio packet.
++    pub fn is_audio(&self) -> bool {
++        self.data.first().is_some_and(|byte| byte & 0x01 == 0)
++    }
++}
++
++/// Iterator over the Vorbis packets of an FSB5 sample.
++#[derive(Debug, Clone)]
++pub struct VorbisPacketIter<'a> {
++    data: &'a [u8],
++    cursor: usize,
++    done: bool,
++}
++
++impl<'a> Iterator for VorbisPacketIter<'a> {
++    type Item = VorbisPacket<'a>;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        if self.done || self.cursor + 2 > self.data.len() {
++            self.done = true;
++            return None;
++        }
++        let size =
++            u16::from_le_bytes([self.data[self.cursor], self.data[self.cursor + 1]]) as usize;
++        self.cursor += 2;
++        if size == 0 || self.cursor + size > self.data.len() {
++            self.done = true;
++            return None;
++        }
++        let payload = &self.data[self.cursor..self.cursor + size];
++        self.cursor += size;
++        Some(VorbisPacket { data: payload })
++    }
++}
++
++/// One sample entry in an FSB5 bank.
++#[derive(Debug, Clone, Default, PartialEq, Eq)]
++pub struct Sample {
++    /// Zero-based index inside the bank.
++    pub index: usize,
++    /// Name from the bank's name table (or `{:04}` of the index when absent).
++    pub name: String,
++    /// Sample rate in hertz.
++    pub frequency: u32,
++    /// Channel count.
++    pub channels: u32,
++    /// Offset of the sample data, in bytes, from the start of the data section.
++    pub data_offset: u32,
++    /// Number of audio frames.
++    pub num_frames: u32,
++    /// Loop start frame, when a LOOP chunk is present.
++    pub loop_start: Option<u32>,
++    /// Loop end frame, when a LOOP chunk is present.
++    pub loop_end: Option<u32>,
++    /// Whether the sample header carried extra metadata chunks.
++    pub has_extra_params: bool,
++    /// Decoded metadata chunks in on-disk order.
++    pub chunks: Vec<Chunk>,
++}
++
++impl Sample {
++    /// Duration in seconds, computed from the frame count and sample rate.
++    pub fn duration_seconds(&self) -> f32 {
++        if self.frequency == 0 {
++            0.0
++        } else {
++            self.num_frames as f32 / self.frequency as f32
++        }
++    }
++
++    /// Whether the sample carries loop metadata.
++    pub fn is_looped(&self) -> bool {
++        self.loop_start.is_some() && self.loop_end.is_some()
++    }
++
++    /// The `VORBISDATA` chunk, when the sample carries one.
++    pub fn vorbis_chunk(&self) -> Option<&Chunk> {
++        self.chunks
++            .iter()
++            .find(|chunk| chunk.kind == ChunkType::VorbisData)
++    }
++
++    /// Decode the `VORBISDATA` chunk into its setup-header id and seek table.
++    pub fn vorbis_data(&self) -> Option<VorbisData> {
++        let payload = &self.vorbis_chunk()?.data;
++        if payload.len() < 4 {
++            return None;
++        }
++        let setup_crc32 = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
++        let mut seek_table = Vec::new();
++        let mut cursor = 4;
++        while cursor + 8 <= payload.len() {
++            seek_table.push((
++                u32::from_le_bytes([
++                    payload[cursor],
++                    payload[cursor + 1],
++                    payload[cursor + 2],
++                    payload[cursor + 3],
++                ]),
++                u32::from_le_bytes([
++                    payload[cursor + 4],
++                    payload[cursor + 5],
++                    payload[cursor + 6],
++                    payload[cursor + 7],
++                ]),
++            ));
++            cursor += 8;
++        }
++        Some(VorbisData {
++            setup_crc32,
++            seek_table,
++        })
++    }
++}
++
++/// A fully parsed FSB5 bank.
++#[derive(Debug, Clone)]
++pub struct Fsb5 {
++    /// Container version field.
++    pub version: u32,
++    /// Number of samples declared by the header.
++    pub num_samples: usize,
++    /// Total size of the sample-header region.
++    pub sample_header_size: u32,
++    /// Size of the name table.
++    pub name_table_size: u32,
++    /// Size of the sample-data region.
++    pub data_size: u32,
++    /// Audio encoding for every sample in the bank.
++    pub format: SoundFormat,
++    /// Size, in bytes, of the header preceding the sample-header region.
++    pub header_size: usize,
++    /// Absolute offset of the sample-data region.
++    pub data_section_offset: usize,
++    /// Decoded samples.
++    pub samples: Vec<Sample>,
++    /// Raw 8-byte header `zero` field, retained for faithful re-serialisation.
++    header_zero: [u8; 8],
++    /// Raw 16-byte header `hash` field.
++    header_hash: [u8; 16],
++    /// Raw 8-byte header `dummy` field.
++    header_dummy: [u8; 8],
++    /// Complete bank bytes, retained so sample payloads can be sliced on demand.
++    data: Vec<u8>,
++}
++
++impl Fsb5 {
++    /// Parse an FSB5 bank from its raw bytes.
++    pub fn parse(data: &[u8]) -> Result<Self, FsbError> {
++        if data.len() < 4 {
++            return Err(FsbError::TooShort {
++                needed: 4,
++                got: data.len(),
++            });
++        }
++        let mut magic = [0u8; 4];
++        magic.copy_from_slice(&data[0..4]);
++        if magic != FSB5_MAGIC {
++            return Err(FsbError::BadMagic(magic));
++        }
++
++        let version = read_u32(data, 4, "version")?;
++        let num_samples = read_u32(data, 8, "numSamples")?;
++        let sample_header_size = read_u32(data, 12, "sampleHeaderSize")?;
++        let name_table_size = read_u32(data, 16, "nameTableSize")?;
++        let data_size = read_u32(data, 20, "dataSize")?;
++        let mode = read_u32(data, 24, "mode")?;
++
++        let header_size = if version == 0 {
++            FSB5_HEADER_SIZE_V0
++        } else {
++            FSB5_HEADER_SIZE
++        };
++        if data.len() < header_size {
++            return Err(FsbError::TooShort {
++                needed: header_size,
++                got: data.len(),
++            });
++        }
++
++        let mut header_zero = [0u8; 8];
++        header_zero.copy_from_slice(&data[28..36]);
++        let mut header_hash = [0u8; 16];
++        header_hash.copy_from_slice(&data[36..52]);
++        let mut header_dummy = [0u8; 8];
++        header_dummy.copy_from_slice(&data[52..60]);
++
++        let sample_count = num_samples as usize;
++        // Every sample header needs at least its 8-byte fixed part.
++        if sample_count.saturating_mul(8) > data.len() {
++            return Err(FsbError::SampleCountTooLarge {
++                samples: num_samples,
++                available_bytes: data.len(),
++            });
++        }
++
++        let format = SoundFormat::from_u32(mode);
++
++        // ---- sample headers -------------------------------------------------
++        let mut cursor = header_size;
++        let mut samples = Vec::with_capacity(sample_count);
++        for index in 0..sample_count {
++            let raw = read_u64(data, cursor, "sample header")?;
++            cursor += 8;
++
++            let has_extra_params = bits(raw, 0, 1) == 1;
++            let frequency_index = bits(raw, 1, 4) as u32;
++            let channels = bits(raw, 5, 1) as u32 + 1;
++            let data_offset_units = bits(raw, 6, 28) as u32;
++            let num_frames = bits(raw, 34, 30) as u32;
++
++            let mut sample = Sample {
++                index,
++                name: format!("{index:04}"),
++                frequency: frequency_from_index(frequency_index).unwrap_or(0),
++                channels,
++                data_offset: data_offset_units * 16,
++                num_frames,
++                has_extra_params,
++                ..Default::default()
++            };
++
++            if has_extra_params {
++                let mut next = true;
++                while next {
++                    let chunk_raw = read_u32(data, cursor, "metadata chunk")?;
++                    cursor += 4;
++                    next = bits(chunk_raw as u64, 0, 1) == 1;
++                    let size = bits(chunk_raw as u64, 1, 24) as u32;
++                    let tag = bits(chunk_raw as u64, 25, 7) as u32;
++                    let payload =
++                        read_bytes(data, cursor, size as usize, "metadata payload")?.to_vec();
++                    cursor += size as usize;
++                    apply_chunk(&mut sample, tag, &payload);
++                    sample.chunks.push(Chunk {
++                        kind: ChunkType::from_u32(tag),
++                        data: payload,
++                    });
++                }
++            }
++
++            samples.push(sample);
++        }
++
++        // ---- name table -----------------------------------------------------
++        let name_table_start = header_size + sample_header_size as usize;
++        if name_table_size > 0 && name_table_start <= data.len() {
++            let name_table_end = name_table_start.saturating_add(name_table_size as usize);
++            for (index, sample) in samples.iter_mut().enumerate() {
++                let offset_pos = name_table_start + index * 4;
++                let Ok(relative) = read_u32(data, offset_pos, "name offset") else {
++                    break;
++                };
++                let start = name_table_start.saturating_add(relative as usize);
++                if start >= data.len() || start >= name_table_end {
++                    continue;
++                }
++                let limit = name_table_end.min(data.len());
++                let end = data[start..limit]
++                    .iter()
++                    .position(|&byte| byte == 0)
++                    .map(|position| start + position)
++                    .unwrap_or(limit);
++                if let Ok(name) = std::str::from_utf8(&data[start..end]) {
++                    sample.name = name.to_string();
++                }
++            }
++        }
++
++        // ---- sample data ----------------------------------------------------
++        let data_section_offset =
++            header_size + sample_header_size as usize + name_table_size as usize;
++
++        Ok(Fsb5 {
++            version,
++            num_samples: sample_count,
++            sample_header_size,
++            name_table_size,
++            data_size,
++            format,
++            header_size,
++            data_section_offset,
++            samples,
++            header_zero,
++            header_hash,
++            header_dummy,
++            data: data.to_vec(),
++        })
++    }
++
++    /// Parse a bank from a file on disk.
++    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, FsbOpenError> {
++        let bytes = std::fs::read(path.as_ref()).map_err(FsbOpenError::Io)?;
++        Fsb5::parse(&bytes).map_err(FsbOpenError::Parse)
++    }
++
++    /// Number of samples in the bank.
++    pub fn len(&self) -> usize {
++        self.samples.len()
++    }
++
++    /// Whether the bank contains no samples.
++    pub fn is_empty(&self) -> bool {
++        self.samples.is_empty()
++    }
++
++    /// Look up a sample by index.
++    pub fn sample(&self, index: usize) -> Option<&Sample> {
++        self.samples.get(index)
++    }
++
++    /// Extract the raw (still encoded) bytes for a sample.
++    ///
++    /// For Vorbis/Mpeg banks the bytes are the compressed bitstream; for PCM
++    /// banks they are interleaved little-endian samples.
++    pub fn sample_data(&self, index: usize) -> Option<&[u8]> {
++        let sample = self.samples.get(index)?;
++        let start = self.data_section_offset + sample.data_offset as usize;
++        let end = self
++            .samples
++            .get(index + 1)
++            .map(|next| self.data_section_offset + next.data_offset as usize)
++            .unwrap_or(self.data_section_offset + self.data_size as usize);
++        if start > end || end > self.data.len() {
++            return None;
++        }
++        Some(&self.data[start..end])
++    }
++
++    /// Iterate the Vorbis packets of a sample in a `VORBIS` bank.
++    ///
++    /// Returns `None` when the bank is not Vorbis-encoded or the sample has no
++    /// data. Decoding the payloads additionally requires the setup header
++    /// identified by [`Sample::vorbis_data`], which is stored inside the bank.
++    pub fn vorbis_packets(&self, index: usize) -> Option<VorbisPacketIter<'_>> {
++        if self.format != SoundFormat::Vorbis {
++            return None;
++        }
++        let data = self.sample_data(index)?;
++        Some(VorbisPacketIter {
++            data,
++            cursor: 0,
++            done: false,
++        })
++    }
++
++    /// Convert a PCM sample into a canonical RIFF/WAVE file.
++    ///
++    /// Returns `None` for compressed formats (`Vorbis`, `Mpeg`, ADPCM, …),
++    /// which require a dedicated decoder. The sample data is written verbatim,
++    /// matching the reference layout (little-endian, signed for 16/24/32-bit).
++    pub fn sample_to_wav(&self, index: usize) -> Option<Vec<u8>> {
++        let sample = self.samples.get(index)?;
++        let data = self.sample_data(index)?;
++        let (bits, format_tag) = match self.format {
++            SoundFormat::Pcm8 => (8u16, 1u16),
++            SoundFormat::Pcm16 => (16, 1),
++            SoundFormat::Pcm24 => (24, 1),
++            SoundFormat::Pcm32 => (32, 1),
++            SoundFormat::PcmFloat => (32, 3),
++            _ => return None,
++        };
++        let channels = sample.channels.max(1) as u16;
++        let block_align = channels * bits / 8;
++        let byte_rate = sample.frequency.saturating_mul(block_align as u32);
++
++        let mut out = Vec::with_capacity(44 + data.len());
++        out.extend_from_slice(b"RIFF");
++        out.extend_from_slice(&(36u32 + data.len() as u32).to_le_bytes());
++        out.extend_from_slice(b"WAVE");
++        out.extend_from_slice(b"fmt ");
++        out.extend_from_slice(&16u32.to_le_bytes());
++        out.extend_from_slice(&format_tag.to_le_bytes());
++        out.extend_from_slice(&channels.to_le_bytes());
++        out.extend_from_slice(&sample.frequency.to_le_bytes());
++        out.extend_from_slice(&byte_rate.to_le_bytes());
++        out.extend_from_slice(&block_align.to_le_bytes());
++        out.extend_from_slice(&bits.to_le_bytes());
++        out.extend_from_slice(b"data");
++        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
++        out.extend_from_slice(data);
++        Some(out)
++    }
++
++    /// The complete bank bytes backing this value.
++    pub fn raw_bytes(&self) -> &[u8] {
++        &self.data
++    }
++
++    /// Raw 8-byte `zero` header field, preserved for faithful re-serialisation.
++    pub fn header_zero(&self) -> [u8; 8] {
++        self.header_zero
++    }
++
++    /// Raw 16-byte `hash` header field, preserved for faithful re-serialisation.
++    pub fn header_hash(&self) -> [u8; 16] {
++        self.header_hash
++    }
++
++    /// Raw 8-byte `dummy` header field, preserved for faithful re-serialisation.
++    pub fn header_dummy(&self) -> [u8; 8] {
++        self.header_dummy
++    }
++
++    /// The metadata chunks of a sample that the writer does not derive itself
++    /// (everything except `CHANNELS`, `FREQUENCY` and `LOOP`).
++    pub fn preserved_chunks(&self, index: usize) -> Vec<(u32, Vec<u8>)> {
++        let Some(sample) = self.samples.get(index) else {
++            return Vec::new();
++        };
++        sample
++            .chunks
++            .iter()
++            .filter(|chunk| {
++                !matches!(
++                    chunk.kind,
++                    ChunkType::Channels | ChunkType::Frequency | ChunkType::Loop
++                )
++            })
++            .map(|chunk| (chunk.kind.as_u32(), chunk.data.clone()))
++            .collect()
++    }
++}
++
++/// Convenience error combining I/O and parse failures.
++#[derive(Debug)]
++pub enum FsbOpenError {
++    /// The file could not be read.
++    Io(std::io::Error),
++    /// The file was read but is not a valid FSB5 bank.
++    Parse(FsbError),
++}
++
++impl fmt::Display for FsbOpenError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            FsbOpenError::Io(error) => write!(f, "could not read bank: {error}"),
++            FsbOpenError::Parse(error) => write!(f, "could not parse bank: {error}"),
++        }
++    }
++}
++
++impl std::error::Error for FsbOpenError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        // Without this the parse error disappears from `format_error_chain` and
++        // from any `{:#}`-style reporting: the caller sees "could not parse
++        // bank" with no reason.
++        match self {
++            FsbOpenError::Io(error) => Some(error),
++            FsbOpenError::Parse(error) => Some(error),
++        }
++    }
++}
++
++/// Update a sample with a decoded metadata chunk.
++fn apply_chunk(sample: &mut Sample, tag: u32, payload: &[u8]) {
++    match tag {
++        1 if !payload.is_empty() => sample.channels = payload[0] as u32,
++        2 if payload.len() >= 4 => {
++            sample.frequency = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
++        }
++        3 if payload.len() >= 8 => {
++            sample.loop_start = Some(u32::from_le_bytes([
++                payload[0], payload[1], payload[2], payload[3],
++            ]));
++            sample.loop_end = Some(u32::from_le_bytes([
++                payload[4], payload[5], payload[6], payload[7],
++            ]));
++        }
++        _ => {}
++    }
++}
++
++/// Map a 4-bit frequency index to a sample rate.
++pub fn frequency_from_index(index: u32) -> Option<u32> {
++    match index {
++        1 => Some(8_000),
++        2 => Some(11_000),
++        3 => Some(11_025),
++        4 => Some(16_000),
++        5 => Some(22_050),
++        6 => Some(24_000),
++        7 => Some(32_000),
++        8 => Some(44_100),
++        9 => Some(48_000),
++        _ => None,
++    }
++}
++
++/// Extract `len` bits starting at `start` from a little-endian bit field.
++fn bits(value: u64, start: u32, len: u32) -> u64 {
++    let stop = start + len;
++    let mask = if stop >= 64 {
++        u64::MAX
++    } else {
++        (1u64 << stop) - 1
++    };
++    (value & mask) >> start
++}
++
++fn read_bytes<'a>(
++    data: &'a [u8],
++    offset: usize,
++    len: usize,
++    context: &'static str,
++) -> Result<&'a [u8], FsbError> {
++    let end = offset
++        .checked_add(len)
++        .ok_or(FsbError::Truncated { context, offset })?;
++    data.get(offset..end)
++        .ok_or(FsbError::Truncated { context, offset })
++}
++
++fn read_u32(data: &[u8], offset: usize, context: &'static str) -> Result<u32, FsbError> {
++    let bytes = read_bytes(data, offset, 4, context)?;
++    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
++}
++
++fn read_u64(data: &[u8], offset: usize, context: &'static str) -> Result<u64, FsbError> {
++    let bytes = read_bytes(data, offset, 8, context)?;
++    let mut array = [0u8; 8];
++    array.copy_from_slice(bytes);
++    Ok(u64::from_le_bytes(array))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// Build a synthetic single-sample PCM16 FSB5 bank.
++    fn synthetic_bank() -> Vec<u8> {
++        let mut file = Vec::new();
++        // header
++        file.extend_from_slice(b"FSB5");
++        file.extend_from_slice(&1u32.to_le_bytes()); // version
++        file.extend_from_slice(&1u32.to_le_bytes()); // numSamples
++        file.extend_from_slice(&8u32.to_le_bytes()); // sampleHeaderSize
++        file.extend_from_slice(&9u32.to_le_bytes()); // nameTableSize
++        file.extend_from_slice(&8u32.to_le_bytes()); // dataSize
++        file.extend_from_slice(&2u32.to_le_bytes()); // mode = PCM16
++        file.extend_from_slice(&[0u8; 8]); // zero
++        file.extend_from_slice(&[0u8; 16]); // hash
++        file.extend_from_slice(&[0u8; 8]); // dummy
++        assert_eq!(file.len(), FSB5_HEADER_SIZE);
++
++        // sample header: extraParams=0, freq index=8 (44100), channels=1, offset=0, frames=4
++        let raw: u64 = (8u64 << 1) | (4u64 << 34);
++        file.extend_from_slice(&raw.to_le_bytes());
++
++        // name table: offset[0]=4 then "beep\0"
++        file.extend_from_slice(&4u32.to_le_bytes());
++        file.extend_from_slice(b"beep\0");
++
++        // data: 4 frames * 1 channel * 2 bytes
++        file.extend_from_slice(&[1u8, 2, 3, 4, 5, 6, 7, 8]);
++        file
++    }
++
++    #[test]
++    fn parses_header_and_sample() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        assert_eq!(bank.version, 1);
++        assert_eq!(bank.num_samples, 1);
++        assert_eq!(bank.format, SoundFormat::Pcm16);
++        assert_eq!(bank.len(), 1);
++
++        let sample = &bank.samples[0];
++        assert_eq!(sample.name, "beep");
++        assert_eq!(sample.frequency, 44_100);
++        assert_eq!(sample.channels, 1);
++        assert_eq!(sample.num_frames, 4);
++        assert_eq!(sample.data_offset, 0);
++        assert!(!sample.is_looped());
++    }
++
++    #[test]
++    fn extracts_sample_data() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        let data = bank.sample_data(0).expect("sample data");
++        assert_eq!(data, &[1, 2, 3, 4, 5, 6, 7, 8]);
++    }
++
++    #[test]
++    fn rejects_non_fsb5() {
++        let error = Fsb5::parse(b"NOPE....").unwrap_err();
++        assert_eq!(error, FsbError::BadMagic(*b"NOPE"));
++    }
++
++    #[test]
++    fn rejects_short_buffer() {
++        assert!(matches!(
++            Fsb5::parse(b"FSB"),
++            Err(FsbError::TooShort { .. })
++        ));
++    }
++
++    #[test]
++    fn bit_extraction_matches_template() {
++        // A 4-bit frequency index of 8 lives in bits [1..5).
++        assert_eq!(bits(8u64 << 1, 1, 4), 8);
++        // top 30-bit field
++        assert_eq!(bits(0xFFFF_FFFF_0000_0000, 34, 30), 0x3FFF_FFFF);
++        // low bit
++        assert_eq!(bits(1, 0, 1), 1);
++        assert_eq!(bits(0, 0, 1), 0);
++    }
++
++    #[test]
++    fn frequency_index_lookup() {
++        assert_eq!(frequency_from_index(8), Some(44_100));
++        assert_eq!(frequency_from_index(0), None);
++        assert_eq!(frequency_from_index(15), None);
++    }
++
++    /// Build a synthetic single-sample VORBIS FSB5 bank with one audio packet.
++    fn synthetic_vorbis_bank() -> Vec<u8> {
++        let mut file = Vec::new();
++        file.extend_from_slice(b"FSB5");
++        file.extend_from_slice(&1u32.to_le_bytes()); // version
++        file.extend_from_slice(&1u32.to_le_bytes()); // numSamples
++                                                     // sampleHeaderSize = 8 (fixed) + 4 (chunk header) + 12 (crc32 + seek entry)
++        file.extend_from_slice(&24u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes()); // nameTableSize
++        file.extend_from_slice(&6u32.to_le_bytes()); // dataSize
++        file.extend_from_slice(&15u32.to_le_bytes()); // mode = VORBIS
++        file.extend_from_slice(&[0u8; 8]);
++        file.extend_from_slice(&[0u8; 16]);
++        file.extend_from_slice(&[0u8; 8]);
++        assert_eq!(file.len(), FSB5_HEADER_SIZE);
++
++        // sample header: extraParams=1, freq index=8 (44100), channels=1, offset=0
++        let raw: u64 = 1 | (8u64 << 1);
++        file.extend_from_slice(&raw.to_le_bytes());
++
++        // metadata chunk: next=0, size=12, type=VORBISDATA(11)
++        let chunk: u32 = (12u32 << 1) | (11u32 << 25);
++        file.extend_from_slice(&chunk.to_le_bytes());
++        // VORBISDATA: crc32 + one seek entry (offset, granule)
++        file.extend_from_slice(&118_203_318u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes());
++        file.extend_from_slice(&0u32.to_le_bytes());
++
++        // data: one packet (size=2, payload 0xAA 0xBB) then terminator
++        file.extend_from_slice(&[0x02, 0x00, 0xAA, 0xBB, 0x00, 0x00]);
++        file
++    }
++
++    #[test]
++    fn parses_vorbis_bank_and_packets() {
++        let bank = Fsb5::parse(&synthetic_vorbis_bank()).expect("bank parses");
++        assert_eq!(bank.format, SoundFormat::Vorbis);
++        assert_eq!(bank.format.file_extension(), "ogg");
++
++        let sample = &bank.samples[0];
++        assert!(sample.has_extra_params);
++        assert_eq!(sample.frequency, 44_100);
++        assert_eq!(sample.channels, 1);
++
++        let vorbis = sample.vorbis_data().expect("vorbis data");
++        assert_eq!(vorbis.setup_crc32, 118_203_318);
++        assert_eq!(vorbis.seek_table, vec![(0, 0)]);
++
++        let packets: Vec<_> = bank.vorbis_packets(0).expect("vorbis packets").collect();
++        assert_eq!(packets.len(), 1);
++        assert!(packets[0].is_audio());
++        assert_eq!(packets[0].data, &[0xAA, 0xBB]);
++    }
++
++    #[test]
++    fn vorbis_packets_none_for_pcm_bank() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        assert!(bank.vorbis_packets(0).is_none());
++    }
++
++    #[test]
++    fn exports_pcm_sample_to_wav() {
++        let bank = Fsb5::parse(&synthetic_bank()).expect("bank parses");
++        let wav = bank.sample_to_wav(0).expect("wav export");
++
++        assert_eq!(&wav[0..4], b"RIFF");
++        assert_eq!(&wav[8..12], b"WAVE");
++        assert_eq!(&wav[12..16], b"fmt ");
++        // audio_format = PCM(1), channels = 1, sample_rate = 44100, bits = 16
++        assert_eq!(u16::from_le_bytes([wav[20], wav[21]]), 1);
++        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
++        assert_eq!(
++            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
++            44_100
++        );
++        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
++        assert_eq!(&wav[36..40], b"data");
++        assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 8);
++        assert_eq!(&wav[44..], &[1, 2, 3, 4, 5, 6, 7, 8]);
++    }
++
++    #[test]
++    fn wav_export_rejects_vorbis() {
++        let bank = Fsb5::parse(&synthetic_vorbis_bank()).expect("bank parses");
++        assert!(bank.sample_to_wav(0).is_none());
++    }
++}
+diff --git a/src/vorbis.rs b/src/vorbis.rs
+index 87ec255..fefc701 100644
+--- a/src/vorbis.rs
++++ b/src/vorbis.rs
+@@ -67,7 +67,9 @@ impl std::fmt::Display for VorbisExportError {
+                 f.write_str("sample has no VORBISDATA metadata chunk")
+             }
+             VorbisExportError::UnknownSetupHeader(crc32) => {
+-                write!(f, "no setup header for id {crc32}")
++                // Hex is the key VORBISDATA stores, so it is the form a user can
++                // search for in the bundled header table; decimal alone is not.
++                write!(f, "no setup header for id 0x{crc32:08x} ({crc32})")
+             }
+             VorbisExportError::NoPackets => f.write_str("no audio packets found"),
+             VorbisExportError::NotOgg => f.write_str("input is not a well-formed Ogg stream"),
+diff --git a/waveform/src/effects.rs b/waveform/src/effects.rs
+index 41975aa..763fe94 100644
+--- a/waveform/src/effects.rs
++++ b/waveform/src/effects.rs
+@@ -1,4 +1,5 @@
+-//! Core effects (S9.2 / S9.3).
++//! Core effects (S9.2 / S9.3) plus the effect chain: EQ, compressor, limiter,
++//! time-stretch and pitch-shift. Pure Rust, no dependencies.
+ 
+ use crate::selection::Selection;
+ 
+@@ -27,10 +28,7 @@ pub fn normalize(samples: &mut [f32], channels: u16, sel: Selection, target_peak
+     if a >= b {
+         return;
+     }
+-    let peak = samples[a..b]
+-        .iter()
+-        .map(|s| s.abs())
+-        .fold(0.0f32, f32::max);
++    let peak = samples[a..b].iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+     if peak < 1e-8 {
+         return;
+     }
+@@ -88,3 +86,265 @@ pub fn fade(samples: &mut [f32], channels: u16, sel: Selection, fade_in: bool) {
+         }
+     }
+ }
++
++/// dB to linear amplitude.
++pub fn db_to_linear(db: f32) -> f32 {
++    10f32.powf(db / 20.0)
++}
++
++/// Linear amplitude to dB (clamped away from zero).
++pub fn linear_to_db(x: f32) -> f32 {
++    20.0 * x.abs().max(1e-12).log10()
++}
++
++/// One peaking EQ band (RBJ audio-EQ cookbook).
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct EqBand {
++    /// Centre frequency in Hz.
++    pub freq: f32,
++    /// Boost / cut in dB, applied at the centre frequency.
++    pub gain_db: f32,
++    /// Bandwidth; higher is narrower.
++    pub q: f32,
++}
++
++impl EqBand {
++    pub fn new(freq: f32, gain_db: f32, q: f32) -> Self {
++        Self {
++            freq,
++            gain_db,
++            q: q.max(0.05),
++        }
++    }
++}
++
++/// Direct-form biquad section.
++struct Biquad {
++    b0: f32,
++    b1: f32,
++    b2: f32,
++    a1: f32,
++    a2: f32,
++}
++
++impl Biquad {
++    fn peaking(freq: f32, gain_db: f32, q: f32, sample_rate: u32) -> Self {
++        let fs = sample_rate.max(1) as f32;
++        let f = freq.clamp(1.0, fs * 0.49);
++        let a = 10f32.powf(gain_db / 40.0);
++        let w0 = std::f32::consts::TAU * f / fs;
++        let cos = w0.cos();
++        let alpha = w0.sin() / (2.0 * q.max(0.05));
++        let a0 = 1.0 + alpha / a;
++        Self {
++            b0: (1.0 + alpha * a) / a0,
++            b1: (-2.0 * cos) / a0,
++            b2: (1.0 - alpha * a) / a0,
++            a1: (-2.0 * cos) / a0,
++            a2: (1.0 - alpha / a) / a0,
++        }
++    }
++
++    fn process(&self, x: f32, s: &mut BiquadState) -> f32 {
++        let y = self.b0 * x + self.b1 * s.x1 + self.b2 * s.x2 - self.a1 * s.y1 - self.a2 * s.y2;
++        s.x2 = s.x1;
++        s.x1 = x;
++        s.y2 = s.y1;
++        s.y1 = y;
++        y
++    }
++}
++
++#[derive(Debug, Clone, Copy, Default)]
++struct BiquadState {
++    x1: f32,
++    x2: f32,
++    y1: f32,
++    y2: f32,
++}
++
++/// Apply peaking EQ bands to an interleaved region, in place.
++pub fn eq(region: &mut [f32], channels: u16, bands: &[EqBand], sample_rate: u32) {
++    let ch = channels.max(1) as usize;
++    if region.is_empty() || ch == 0 {
++        return;
++    }
++    for band in bands {
++        let bq = Biquad::peaking(band.freq, band.gain_db, band.q, sample_rate);
++        let mut states = vec![BiquadState::default(); ch];
++        for frame in region.chunks_exact_mut(ch) {
++            for (c, s) in frame.iter_mut().enumerate() {
++                *s = bq.process(*s, &mut states[c]);
++            }
++        }
++    }
++}
++
++/// Compressor settings; thresholds and makeup are in dB.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct CompressorParams {
++    pub threshold_db: f32,
++    pub ratio: f32,
++    pub attack_ms: f32,
++    pub release_ms: f32,
++    pub makeup_db: f32,
++}
++
++impl Default for CompressorParams {
++    fn default() -> Self {
++        Self {
++            threshold_db: -18.0,
++            ratio: 4.0,
++            attack_ms: 5.0,
++            release_ms: 80.0,
++            makeup_db: 0.0,
++        }
++    }
++}
++
++/// Stereo-linked peak compressor: one gain per frame, so the image stays put.
++pub fn compress(region: &mut [f32], channels: u16, params: CompressorParams, sample_rate: u32) {
++    let ch = channels.max(1) as usize;
++    if region.is_empty() || ch == 0 {
++        return;
++    }
++    let fs = sample_rate.max(1) as f32;
++    let thr = params.threshold_db;
++    let ratio = params.ratio.max(1.0);
++    let makeup = db_to_linear(params.makeup_db);
++    let attack_tau = (params.attack_ms.max(0.01) / 1000.0) * fs;
++    let release_tau = (params.release_ms.max(0.01) / 1000.0) * fs;
++    let a_att = (-1.0 / attack_tau).exp();
++    let a_rel = (-1.0 / release_tau).exp();
++    let mut env = 0.0f32;
++    for frame in region.chunks_exact_mut(ch) {
++        let peak = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
++        let coeff = if peak > env { a_att } else { a_rel };
++        env = coeff * env + (1.0 - coeff) * peak;
++        let over = linear_to_db(env) - thr;
++        let gain_db = if over > 0.0 {
++            -over * (1.0 - 1.0 / ratio)
++        } else {
++            0.0
++        };
++        let g = db_to_linear(gain_db) * makeup;
++        for s in frame.iter_mut() {
++            *s *= g;
++        }
++    }
++}
++
++/// Peak limiter with instant attack and 50 ms release: output never exceeds the ceiling.
++pub fn limiter(region: &mut [f32], channels: u16, ceiling_db: f32, sample_rate: u32) {
++    let ch = channels.max(1) as usize;
++    if region.is_empty() || ch == 0 {
++        return;
++    }
++    let ceiling = db_to_linear(ceiling_db).clamp(1e-4, 1.0);
++    let a_rel = (-1.0f32 / (sample_rate.max(1) as f32 * 0.05)).exp();
++    let mut gain = 1.0f32;
++    for frame in region.chunks_exact_mut(ch) {
++        let peak = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
++        let target = if peak > ceiling { ceiling / peak } else { 1.0 };
++        if target < gain {
++            gain = target;
++        } else {
++            gain = a_rel * gain + (1.0 - a_rel) * target.min(1.0);
++        }
++        for s in frame.iter_mut() {
++            *s *= gain;
++        }
++    }
++}
++
++/// Linear-interpolation resampler. `ratio > 1` plays faster: shorter and higher.
++pub fn resample(region: &[f32], channels: u16, ratio: f32) -> Vec<f32> {
++    let ch = channels.max(1) as usize;
++    let frames = region.len() / ch;
++    if frames == 0 || !ratio.is_finite() || ratio <= 0.0 {
++        return region.to_vec();
++    }
++    let out_frames = ((frames as f32 / ratio).round() as usize).max(1);
++    let mut out = vec![0.0f32; out_frames * ch];
++    for f in 0..out_frames {
++        let src = f as f32 * ratio;
++        let idx = src.floor() as usize;
++        let frac = src - idx as f32;
++        let i0 = idx.min(frames - 1);
++        let i1 = (i0 + 1).min(frames - 1);
++        for c in 0..ch {
++            let a = region[i0 * ch + c];
++            let b = region[i1 * ch + c];
++            out[f * ch + c] = a + (b - a) * frac;
++        }
++    }
++    out
++}
++
++/// Hann-windowed overlap-add time stretch. Duration scales by `ratio`, pitch does not.
++pub fn time_stretch(region: &[f32], channels: u16, ratio: f32, sample_rate: u32) -> Vec<f32> {
++    let ch = channels.max(1) as usize;
++    let frames = region.len() / ch;
++    if frames == 0 || !ratio.is_finite() || ratio <= 0.0 {
++        return region.to_vec();
++    }
++    let fs = sample_rate.max(8_000) as f32;
++    let mut win = (fs * 0.046) as usize;
++    win = win.clamp(256, 4096);
++    win -= win % 2;
++    let hop_out = (win / 2).max(1);
++    let hop_in = ((hop_out as f32 / ratio).round() as usize).max(1);
++    let out_frames = ((frames as f32 * ratio).round() as usize).max(1);
++    let mut out = vec![0.0f32; out_frames * ch];
++    let mut norm = vec![0.0f32; out_frames];
++    let window: Vec<f32> = (0..win)
++        .map(|i| {
++            let t = i as f32 / win as f32;
++            0.5 - 0.5 * (std::f32::consts::TAU * t).cos()
++        })
++        .collect();
++    let mut pos_out = 0usize;
++    let mut pos_in = 0usize;
++    while pos_out < out_frames {
++        for i in 0..win {
++            let o = pos_out + i;
++            if o >= out_frames {
++                break;
++            }
++            let src = (pos_in + i).min(frames - 1);
++            let g = window[i];
++            for c in 0..ch {
++                out[o * ch + c] += region[src * ch + c] * g;
++            }
++            norm[o] += g;
++        }
++        pos_out += hop_out;
++        pos_in += hop_in;
++        if pos_in >= frames {
++            break;
++        }
++    }
++    for (o, n) in norm.iter().enumerate() {
++        if *n > 1e-6 {
++            for c in 0..ch {
++                out[o * ch + c] /= *n;
++            }
++        }
++    }
++    out
++}
++
++/// Shift pitch by `semitones` while keeping the region length unchanged.
++pub fn pitch_shift(region: &[f32], channels: u16, semitones: f32, sample_rate: u32) -> Vec<f32> {
++    let ch = channels.max(1) as usize;
++    let target_frames = region.len() / ch;
++    if target_frames == 0 || semitones.abs() < 1e-3 {
++        return region.to_vec();
++    }
++    let r = 2f32.powf(semitones / 12.0);
++    let stretched = time_stretch(region, channels, r, sample_rate);
++    let mut out = resample(&stretched, channels, r);
++    out.resize(target_frames * ch, 0.0);
++    out.truncate(target_frames * ch);
++    out
++}
+diff --git a/waveform/src/export.rs b/waveform/src/export.rs
+index a92a8f6..2435ed4 100644
+--- a/waveform/src/export.rs
++++ b/waveform/src/export.rs
+@@ -57,7 +57,7 @@ pub fn write_wav_i16(
+     let block_align = channels * 2;
+     file.write_all(&block_align.to_le_bytes())?;
+     file.write_all(&16u16.to_le_bytes())?; // bits
+-    // data
++                                           // data
+     file.write_all(b"data")?;
+     file.write_all(&(data_bytes as u32).to_le_bytes())?;
+ 
+diff --git a/waveform/src/history.rs b/waveform/src/history.rs
+index e2c3a0b..b67368c 100644
+--- a/waveform/src/history.rs
++++ b/waveform/src/history.rs
+@@ -1,37 +1,144 @@
+-//! Undo stack (S9.3).
++//! Undo / redo stack (S9.3).
++//!
++//! Edits are recorded as commands that carry the state to restore. Structural
++//! edits (cut, paste, delete) record the whole buffer; in-place effects record
++//! only the affected sample range, so a gain or fade on a long file does not
++//! clone the buffer per edit.
++
++use crate::selection::Selection;
+ 
+ #[derive(Debug, Clone)]
+ pub enum EditCommand {
+-    /// Full buffer snapshot (simple, reliable).
+-    ReplaceAll { samples: Vec<f32> },
++    /// Buffer state before a structural edit that changed the length.
++    ReplaceAll {
++        samples: Vec<f32>,
++        selection: Selection,
++    },
++    /// Sample range before an in-place edit that kept the buffer length.
++    ReplaceRegion {
++        start: usize,
++        end: usize,
++        samples: Vec<f32>,
++        selection: Selection,
++    },
++}
++
++impl EditCommand {
++    /// Selection that was active when the edit was made.
++    pub fn selection(&self) -> Selection {
++        match self {
++            EditCommand::ReplaceAll { selection, .. } => *selection,
++            EditCommand::ReplaceRegion { selection, .. } => *selection,
++        }
++    }
+ }
+ 
+-#[derive(Debug, Default)]
++#[derive(Debug, Clone, Default)]
+ pub struct UndoStack {
+-    stack: Vec<EditCommand>,
++    undo: Vec<EditCommand>,
++    redo: Vec<EditCommand>,
+     max: usize,
+ }
+ 
+ impl UndoStack {
+     pub fn new(max: usize) -> Self {
+         Self {
+-            stack: Vec::new(),
++            undo: Vec::new(),
++            redo: Vec::new(),
+             max: max.max(1),
+         }
+     }
+ 
++    /// Record a new edit. Pending redo history is discarded, as in any editor.
+     pub fn push(&mut self, cmd: EditCommand) {
+-        if self.stack.len() >= self.max {
+-            self.stack.remove(0);
++        self.redo.clear();
++        self.record_undo(cmd);
++    }
++
++    /// Append an undo entry without touching the redo stack (used while redoing).
++    pub(crate) fn record_undo(&mut self, cmd: EditCommand) {
++        if self.undo.len() >= self.max {
++            self.undo.remove(0);
+         }
+-        self.stack.push(cmd);
++        self.undo.push(cmd);
++    }
++
++    /// Append a redo entry without touching the undo stack (used while undoing).
++    pub(crate) fn record_redo(&mut self, cmd: EditCommand) {
++        if self.redo.len() >= self.max {
++            self.redo.remove(0);
++        }
++        self.redo.push(cmd);
+     }
+ 
+     pub fn pop(&mut self) -> Option<EditCommand> {
+-        self.stack.pop()
++        self.undo.pop()
++    }
++
++    pub fn pop_redo(&mut self) -> Option<EditCommand> {
++        self.redo.pop()
+     }
+ 
+     pub fn can_undo(&self) -> bool {
+-        !self.stack.is_empty()
++        !self.undo.is_empty()
++    }
++
++    pub fn can_redo(&self) -> bool {
++        !self.redo.is_empty()
++    }
++
++    pub fn undo_depth(&self) -> usize {
++        self.undo.len()
++    }
++
++    pub fn redo_depth(&self) -> usize {
++        self.redo.len()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn cmd(n: usize) -> EditCommand {
++        EditCommand::ReplaceAll {
++            samples: vec![n as f32],
++            selection: Selection::region(0, 1),
++        }
++    }
++
++    #[test]
++    fn push_starts_a_new_branch() {
++        let mut s = UndoStack::new(4);
++        s.push(cmd(1));
++        s.push(cmd(2));
++        assert!(s.can_undo());
++        assert!(!s.can_redo());
++        assert_eq!(s.undo_depth(), 2);
++        let back = s.pop().unwrap();
++        s.record_redo(back);
++        assert!(s.can_redo());
++        s.push(cmd(3));
++        assert!(!s.can_redo(), "a new edit discards redo");
++    }
++
++    #[test]
++    fn history_is_bounded() {
++        let mut s = UndoStack::new(2);
++        for i in 0..5 {
++            s.push(cmd(i));
++        }
++        assert_eq!(s.undo_depth(), 2);
++    }
++
++    #[test]
++    fn selection_is_carried_by_the_command() {
++        let c = EditCommand::ReplaceRegion {
++            start: 3,
++            end: 9,
++            samples: vec![0.0; 6],
++            selection: Selection::region(3, 9),
++        };
++        assert_eq!(c.selection(), Selection::region(3, 9));
+     }
+ }
+diff --git a/waveform/src/import.rs b/waveform/src/import.rs
+index 9956c13..8e0420f 100644
+--- a/waveform/src/import.rs
++++ b/waveform/src/import.rs
+@@ -100,9 +100,7 @@ pub fn read_audio(path: &Path) -> Result<WaveBuffer, ImportError> {
+                 decoder.reset();
+                 continue;
+             }
+-            Err(SymphoniaError::IoError(e))
+-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+-            {
++            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                 break;
+             }
+             Err(SymphoniaError::IoError(e)) => return Err(ImportError::Io(e)),
+@@ -148,50 +146,77 @@ pub fn read_wav(path: &Path) -> Result<WaveBuffer, ImportError> {
+ 
+ fn append_decoded(out: &mut Vec<f32>, decoded: AudioBufferRef<'_>, channels: u16) {
+     let ch = channels.max(1) as usize;
++    // Every branch feeds the same concrete helper, so no `Sample` bound is needed.
+     match decoded {
+         AudioBufferRef::F32(buf) => {
+-            let frames = buf.frames();
+-            for f in 0..frames {
+-                for c in 0..ch.min(buf.spec().channels.count()) {
+-                    out.push(buf.chan(c)[f]);
+-                }
+-                // pad if fewer planes than expected
+-                for _ in buf.spec().channels.count()..ch {
+-                    out.push(0.0);
+-                }
+-            }
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| buf.chan(c)[f]);
++        }
++        AudioBufferRef::U8(buf) => {
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                (buf.chan(c)[f] as f32 - 128.0) / 128.0
++            });
+         }
+-        AudioBufferRef::U8(buf) => plane_to_f32(out, buf, |s| (s as f32 - 128.0) / 128.0, ch),
+         AudioBufferRef::U16(buf) => {
+-            plane_to_f32(out, buf, |s| (s as f32 / 65535.0) * 2.0 - 1.0, ch)
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                (buf.chan(c)[f] as f32 / 65535.0) * 2.0 - 1.0
++            });
+         }
+         AudioBufferRef::U24(buf) => {
+-            plane_to_f32(out, buf, |s| s.inner() as f32 / 8_388_607.0, ch)
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                buf.chan(c)[f].inner() as f32 / 8_388_607.0
++            });
+         }
+         AudioBufferRef::U32(buf) => {
+-            plane_to_f32(out, buf, |s| (s as f32 / 4_294_967_295.0) * 2.0 - 1.0, ch)
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                (buf.chan(c)[f] as f32 / 4_294_967_295.0) * 2.0 - 1.0
++            });
++        }
++        AudioBufferRef::S8(buf) => {
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                buf.chan(c)[f] as f32 / 128.0
++            });
++        }
++        AudioBufferRef::S16(buf) => {
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                buf.chan(c)[f] as f32 / 32768.0
++            });
+         }
+-        AudioBufferRef::S8(buf) => plane_to_f32(out, buf, |s| s as f32 / 128.0, ch),
+-        AudioBufferRef::S16(buf) => plane_to_f32(out, buf, |s| s as f32 / 32768.0, ch),
+         AudioBufferRef::S24(buf) => {
+-            plane_to_f32(out, buf, |s| s.inner() as f32 / 8_388_608.0, ch)
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                buf.chan(c)[f].inner() as f32 / 8_388_608.0
++            });
++        }
++        AudioBufferRef::S32(buf) => {
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| {
++                buf.chan(c)[f] as f32 / 2_147_483_648.0
++            });
++        }
++        AudioBufferRef::F64(buf) => {
++            let (frames, planes) = (buf.frames(), buf.spec().channels.count());
++            push_frames(out, frames, planes, ch, |c, f| buf.chan(c)[f] as f32);
+         }
+-        AudioBufferRef::S32(buf) => plane_to_f32(out, buf, |s| s as f32 / 2_147_483_648.0, ch),
+-        AudioBufferRef::F64(buf) => plane_to_f32(out, buf, |s| s as f32, ch),
+     }
+ }
+ 
+-fn plane_to_f32<S: Copy>(
++fn push_frames(
+     out: &mut Vec<f32>,
+-    buf: symphonia::core::audio::AudioBuffer<S>,
+-    conv: impl Fn(S) -> f32,
++    frames: usize,
++    planes: usize,
+     ch: usize,
++    mut get: impl FnMut(usize, usize) -> f32,
+ ) {
+-    let frames = buf.frames();
+-    let planes = buf.spec().channels.count();
+     for f in 0..frames {
+         for c in 0..ch.min(planes) {
+-            out.push(conv(buf.chan(c)[f]));
++            out.push(get(c, f));
+         }
+         for _ in planes..ch {
+             out.push(0.0);
+diff --git a/waveform/src/lib.rs b/waveform/src/lib.rs
+index 452a262..1a90b78 100644
+--- a/waveform/src/lib.rs
++++ b/waveform/src/lib.rs
+@@ -1,6 +1,6 @@
+ //! # ramod_waveform — GoldWave-style PCM editing core (S9)
+ //!
+-//! Pure-Rust friendly buffer with selection, effects, undo.
++//! Pure-Rust friendly buffer with selection, effects, and undo/redo.
+ //! Import: WAV / MP3 / OGG Vorbis / FLAC (Symphonia).
+ 
+ mod effects;
+@@ -10,12 +10,15 @@ mod import;
+ mod selection;
+ mod view;
+ 
+-pub use effects::{fade, gain, normalize, reverse, silence};
++pub use effects::{
++    compress, db_to_linear, eq, fade, gain, limiter, linear_to_db, normalize, pitch_shift,
++    resample, reverse, silence, time_stretch, CompressorParams, EqBand,
++};
+ pub use export::{write_wav_i16, WavError};
+ pub use history::{EditCommand, UndoStack};
+ pub use import::{is_supported_extension, read_audio, read_wav, ImportError};
+ pub use selection::Selection;
+-pub use view::{peak_overview, PeakMinMax};
++pub use view::{peak_overview, PeakMinMax, Viewport};
+ 
+ /// Interleaved float PCM buffer (−1.0 … 1.0).
+ #[derive(Debug, Clone)]
+@@ -83,32 +86,99 @@ impl WaveBuffer {
+         self.selection = Selection::region(start, end);
+     }
+ 
++    /// Record the whole buffer before a structural edit (cut / paste / delete).
+     fn push_undo(&mut self) {
+         self.undo.push(EditCommand::ReplaceAll {
+             samples: self.samples.clone(),
++            selection: self.selection,
+         });
+     }
+ 
+-    pub fn can_undo(&self) -> bool {
+-        self.undo.can_undo()
++    /// Record only the affected range before an in-place effect.
++    fn push_region_undo(&mut self) {
++        let (a, b) = self.selection.sample_range(self.channels);
++        let b = b.min(self.samples.len());
++        let a = a.min(b);
++        self.undo.push(EditCommand::ReplaceRegion {
++            start: a,
++            end: b,
++            samples: self.samples[a..b].to_vec(),
++            selection: self.selection,
++        });
+     }
+ 
+-    pub fn undo(&mut self) -> bool {
+-        if let Some(EditCommand::ReplaceAll { samples }) = self.undo.pop() {
+-            self.samples = samples;
+-            let f = self.frames();
+-            if self.selection.end > f {
+-                self.selection.end = f;
++    fn clamp_selection(&mut self) {
++        let f = self.frames();
++        self.selection.end = self.selection.end.min(f);
++        if self.selection.start > self.selection.end {
++            self.selection.start = self.selection.end;
++        }
++    }
++
++    /// Apply `cmd` to the buffer and return the command that undoes it.
++    fn apply_command(&mut self, cmd: EditCommand) -> EditCommand {
++        match cmd {
++            EditCommand::ReplaceAll { samples, selection } => {
++                let prev_samples = std::mem::replace(&mut self.samples, samples);
++                let prev_selection = std::mem::replace(&mut self.selection, selection);
++                EditCommand::ReplaceAll {
++                    samples: prev_samples,
++                    selection: prev_selection,
++                }
+             }
+-            if self.selection.start > self.selection.end {
+-                self.selection.start = self.selection.end;
++            EditCommand::ReplaceRegion {
++                start,
++                end,
++                samples,
++                selection,
++            } => {
++                let end = end.min(self.samples.len());
++                let start = start.min(end);
++                let prev_samples: Vec<f32> = self.samples[start..end].to_vec();
++                for (i, s) in samples.iter().enumerate() {
++                    if let Some(slot) = self.samples.get_mut(start + i) {
++                        *slot = *s;
++                    }
++                }
++                let prev_selection = std::mem::replace(&mut self.selection, selection);
++                EditCommand::ReplaceRegion {
++                    start,
++                    end: start + samples.len(),
++                    samples: prev_samples,
++                    selection: prev_selection,
++                }
+             }
+-            true
+-        } else {
+-            false
+         }
+     }
+ 
++    pub fn can_undo(&self) -> bool {
++        self.undo.can_undo()
++    }
++
++    pub fn can_redo(&self) -> bool {
++        self.undo.can_redo()
++    }
++
++    pub fn undo(&mut self) -> bool {
++        let Some(cmd) = self.undo.pop() else {
++            return false;
++        };
++        let inverse = self.apply_command(cmd);
++        self.undo.record_redo(inverse);
++        self.clamp_selection();
++        true
++    }
++
++    pub fn redo(&mut self) -> bool {
++        let Some(cmd) = self.undo.pop_redo() else {
++            return false;
++        };
++        let inverse = self.apply_command(cmd);
++        self.undo.record_undo(inverse);
++        self.clamp_selection();
++        true
++    }
++
+     pub fn cut(&mut self) -> Vec<f32> {
+         let clip = self.copy();
+         self.delete_selection();
+@@ -151,7 +221,7 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         silence(&mut self.samples, self.channels, self.selection);
+     }
+ 
+@@ -159,7 +229,7 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         reverse(&mut self.samples, self.channels, self.selection);
+     }
+ 
+@@ -167,7 +237,7 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         gain(&mut self.samples, self.channels, self.selection, linear);
+     }
+ 
+@@ -175,7 +245,7 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         normalize(
+             &mut self.samples,
+             self.channels,
+@@ -188,7 +258,7 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         fade(&mut self.samples, self.channels, self.selection, true);
+     }
+ 
+@@ -196,19 +266,152 @@ impl WaveBuffer {
+         if self.selection.is_empty() {
+             return;
+         }
+-        self.push_undo();
++        self.push_region_undo();
+         fade(&mut self.samples, self.channels, self.selection, false);
+     }
+ 
++    /// Apply peaking EQ bands to the selection; undo restores only that region.
++    pub fn apply_eq(&mut self, bands: &[EqBand]) -> bool {
++        if self.selection.is_empty() || bands.is_empty() {
++            return false;
++        }
++        let (a, b) = self.region_range();
++        if a >= b {
++            return false;
++        }
++        self.push_region_undo();
++        eq(
++            &mut self.samples[a..b],
++            self.channels,
++            bands,
++            self.sample_rate,
++        );
++        true
++    }
++
++    /// Compress the selection (stereo-linked, so the image does not shift).
++    pub fn apply_compress(&mut self, params: CompressorParams) -> bool {
++        if self.selection.is_empty() {
++            return false;
++        }
++        let (a, b) = self.region_range();
++        if a >= b {
++            return false;
++        }
++        self.push_region_undo();
++        compress(
++            &mut self.samples[a..b],
++            self.channels,
++            params,
++            self.sample_rate,
++        );
++        true
++    }
++
++    /// Limit the selection to a ceiling in dB.
++    pub fn apply_limit(&mut self, ceiling_db: f32) -> bool {
++        if self.selection.is_empty() {
++            return false;
++        }
++        let (a, b) = self.region_range();
++        if a >= b {
++            return false;
++        }
++        self.push_region_undo();
++        limiter(
++            &mut self.samples[a..b],
++            self.channels,
++            ceiling_db,
++            self.sample_rate,
++        );
++        true
++    }
++
++    /// Stretch the selection in time. `ratio > 1` is longer; pitch is unchanged.
++    pub fn apply_time_stretch(&mut self, ratio: f32) -> bool {
++        if self.selection.is_empty() || !ratio.is_finite() || ratio <= 0.0 {
++            return false;
++        }
++        let (a, b) = self.region_range();
++        if a >= b {
++            return false;
++        }
++        let out = time_stretch(&self.samples[a..b], self.channels, ratio, self.sample_rate);
++        self.replace_region(a, b, out)
++    }
++
++    /// Shift the selection's pitch by `semitones`, keeping its length.
++    pub fn apply_pitch(&mut self, semitones: f32) -> bool {
++        if self.selection.is_empty() || !semitones.is_finite() || semitones.abs() < 1e-3 {
++            return false;
++        }
++        let (a, b) = self.region_range();
++        if a >= b {
++            return false;
++        }
++        let out = pitch_shift(
++            &self.samples[a..b],
++            self.channels,
++            semitones,
++            self.sample_rate,
++        );
++        self.replace_region(a, b, out)
++    }
++
++    /// Clamped sample range of the current selection.
++    fn region_range(&self) -> (usize, usize) {
++        let (a, b) = self.selection.sample_range(self.channels);
++        let b = b.min(self.samples.len());
++        (a.min(b), b)
++    }
++
++    /// Replace `[a, b)` with `out`, choosing region or full-buffer undo by length.
++    fn replace_region(&mut self, a: usize, b: usize, out: Vec<f32>) -> bool {
++        if out.is_empty() {
++            return false;
++        }
++        let ch = (self.channels as usize).max(1);
++        if out.len() == b - a {
++            self.push_region_undo();
++            self.samples[a..b].copy_from_slice(&out);
++            return true;
++        }
++        self.push_undo();
++        let inserted_frames = out.len() / ch;
++        let start = a / ch;
++        self.samples.splice(a..b, out.iter().copied());
++        self.selection = Selection::region(start, start + inserted_frames);
++        true
++    }
++
+     pub fn overview(&self, buckets: usize) -> Vec<PeakMinMax> {
+         peak_overview(&self.samples, self.channels, buckets)
+     }
+ 
+-    pub fn export_wav(
++    /// Peak envelope of `frames` frames starting at `start_frame`.
++    ///
++    /// A zoomed view must paint the visible span, not the whole file squeezed
++    /// into the same pixels, or zooming in and out shows an identical picture.
++    pub fn overview_range(
+         &self,
+-        path: &std::path::Path,
+-        selection_only: bool,
+-    ) -> Result<(), WavError> {
++        start_frame: usize,
++        frames: usize,
++        buckets: usize,
++    ) -> Vec<PeakMinMax> {
++        let ch = (self.channels as usize).max(1);
++        let total = self.frames();
++        let start = start_frame.min(total);
++        let end = start.saturating_add(frames).min(total);
++        peak_overview(&self.samples[start * ch..end * ch], self.channels, buckets)
++    }
++
++    /// Visible span as `(start_frame, frame_count)`, for painting.
++    pub fn visible_span(&self, viewport: &Viewport) -> (usize, usize) {
++        let (a, b) = viewport.visible_range();
++        (a, b.saturating_sub(a))
++    }
++
++    pub fn export_wav(&self, path: &std::path::Path, selection_only: bool) -> Result<(), WavError> {
+         let samples = if selection_only && !self.selection.is_empty() {
+             let (a, b) = self.selection.sample_range(self.channels);
+             &self.samples[a..b]
+@@ -267,4 +470,225 @@ mod tests {
+         assert_eq!(loaded.channels, 1);
+         let _ = std::fs::remove_file(&path);
+     }
++
++    #[test]
++    fn undo_then_redo_restores_the_edit() {
++        let mut w = mono_ramp();
++        w.set_selection(10, 20);
++        w.apply_silence();
++        assert!(w.samples[10..20].iter().all(|s| *s == 0.0));
++        assert!(w.can_undo());
++        assert!(!w.can_redo());
++        assert!(w.undo());
++        assert!(w.samples[10..20].iter().any(|s| *s != 0.0));
++        assert!(w.can_redo());
++        assert!(w.redo());
++        assert!(w.samples[10..20].iter().all(|s| *s == 0.0));
++    }
++
++    #[test]
++    fn new_edit_discards_redo_history() {
++        let mut w = mono_ramp();
++        w.select_all();
++        w.apply_gain(0.5);
++        assert!(w.undo());
++        assert!(w.can_redo());
++        w.set_selection(0, 5);
++        w.apply_silence();
++        assert!(!w.can_redo(), "a new edit must invalidate redo");
++    }
++
++    #[test]
++    fn undo_after_structural_edit_restores_length() {
++        let mut w = mono_ramp();
++        w.set_selection(0, 10);
++        let clip = w.cut();
++        assert_eq!(clip.len(), 10);
++        assert_eq!(w.frames(), 90);
++        assert!(w.undo());
++        assert_eq!(w.frames(), 100);
++        assert_eq!(w.samples[0], 0.0);
++        assert!(w.redo());
++        assert_eq!(w.frames(), 90);
++    }
++
++    #[test]
++    fn region_undo_preserves_interleaved_channels() {
++        let mut interleaved = Vec::with_capacity(200);
++        for i in 0..100 {
++            interleaved.push(i as f32);
++            interleaved.push(-(i as f32));
++        }
++        let mut w = WaveBuffer::new(interleaved, 2, 48_000).unwrap();
++        w.set_selection(10, 20);
++        w.apply_reverse();
++        assert_eq!(w.samples[20], 19.0);
++        assert_eq!(w.samples[21], -19.0);
++        assert!(w.undo());
++        assert_eq!(w.samples[20], 10.0);
++        assert_eq!(w.samples[21], -10.0);
++    }
++
++    #[test]
++    fn undo_with_empty_history_is_false() {
++        let mut w = mono_ramp();
++        assert!(!w.undo());
++        assert!(!w.redo());
++        assert!(!w.can_redo());
++    }
++
++    fn sine(frames: usize, freq: f32, rate: u32, amp: f32) -> Vec<f32> {
++        (0..frames)
++            .map(|i| (std::f32::consts::TAU * freq * i as f32 / rate as f32).sin() * amp)
++            .collect()
++    }
++
++    fn rms(x: &[f32]) -> f32 {
++        (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
++    }
++
++    fn zero_crossings(x: &[f32]) -> usize {
++        x.windows(2)
++            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
++            .count()
++    }
++
++    #[test]
++    fn eq_boost_raises_the_band_and_undo_restores_it() {
++        let mut w = WaveBuffer::new(sine(24_000, 1_000.0, 48_000, 0.5), 1, 48_000).unwrap();
++        let before = rms(&w.samples);
++        w.select_all();
++        assert!(w.apply_eq(&[EqBand::new(1_000.0, 12.0, 1.0)]));
++        let ratio = rms(&w.samples) / before;
++        assert!(
++            ratio > 2.5 && ratio < 5.0,
++            "+12 dB should be about 4x, got {ratio}"
++        );
++        assert!(w.undo());
++        assert!((rms(&w.samples) - before).abs() < 1e-4);
++    }
++
++    #[test]
++    fn eq_cut_leaves_far_bands_alone() {
++        let mut w = WaveBuffer::new(sine(24_000, 5_000.0, 48_000, 0.5), 1, 48_000).unwrap();
++        let before = rms(&w.samples);
++        w.select_all();
++        assert!(w.apply_eq(&[EqBand::new(200.0, -18.0, 1.0)]));
++        let after = rms(&w.samples);
++        assert!(
++            (after - before).abs() / before < 0.1,
++            "5 kHz should be largely unaffected"
++        );
++    }
++
++    #[test]
++    fn compressor_reduces_loud_material() {
++        let mut w = WaveBuffer::new(sine(24_000, 200.0, 48_000, 0.5), 1, 48_000).unwrap();
++        w.select_all();
++        assert!(w.apply_compress(CompressorParams {
++            threshold_db: -20.0,
++            ratio: 8.0,
++            attack_ms: 1.0,
++            release_ms: 40.0,
++            makeup_db: 0.0,
++        }));
++        let tail = &w.samples[12_000..];
++        let peak = tail.iter().fold(0.0f32, |m, s| m.max(s.abs()));
++        assert!(peak < 0.2, "expected heavy reduction below 0.2, got {peak}");
++    }
++
++    #[test]
++    fn limiter_never_exceeds_the_ceiling() {
++        let mut loud = sine(24_000, 300.0, 48_000, 3.0);
++        loud[0] = 0.01;
++        let mut w = WaveBuffer::new(loud, 1, 48_000).unwrap();
++        w.select_all();
++        assert!(w.apply_limit(-1.0));
++        let peak = w.samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
++        assert!(peak <= 0.892, "peak {peak} exceeds the ceiling");
++    }
++
++    #[test]
++    fn time_stretch_scales_duration_and_is_undoable() {
++        let mut w = WaveBuffer::new(sine(12_000, 440.0, 48_000, 0.5), 1, 48_000).unwrap();
++        w.select_all();
++        assert!(w.apply_time_stretch(1.5));
++        let frames = w.frames();
++        assert!((frames as i64 - 18_000).abs() < 400, "frames {frames}");
++        assert!(rms(&w.samples) > 0.1, "stretch must keep the signal");
++        assert!(w.undo());
++        assert_eq!(w.frames(), 12_000);
++    }
++
++    #[test]
++    fn pitch_shift_keeps_length_and_raises_frequency() {
++        let n = 24_000;
++        let mut w = WaveBuffer::new(sine(n, 220.0, 48_000, 0.5), 1, 48_000).unwrap();
++        let before = zero_crossings(&w.samples);
++        w.select_all();
++        assert!(w.apply_pitch(12.0));
++        assert_eq!(w.frames(), n, "pitch must not change duration");
++        let after = zero_crossings(&w.samples);
++        assert!(
++            after as f32 > before as f32 * 1.3,
++            "octave up should cross zero more often ({before} -> {after})"
++        );
++        assert!(w.undo());
++        assert_eq!(zero_crossings(&w.samples), before);
++    }
++
++    #[test]
++    fn structural_effects_keep_stereo_interleaving() {
++        let mut interleaved = Vec::with_capacity(24_000);
++        for i in 0..12_000 {
++            let v = (i as f32 * 0.01).sin() * 0.5;
++            interleaved.push(v);
++            interleaved.push(-v);
++        }
++        let mut w = WaveBuffer::new(interleaved, 2, 48_000).unwrap();
++        w.select_all();
++        assert!(w.apply_time_stretch(2.0));
++        let mut checked = 0;
++        for f in w.samples.chunks_exact(2) {
++            assert!((f[0] + f[1]).abs() < 1e-3, "channels drifted: {f:?}");
++            checked += 1;
++        }
++        assert!(checked > 20_000, "only {checked} frames checked");
++    }
++
++    #[test]
++    fn zoomed_overview_shows_only_the_visible_span() {
++        // First half silent, second half full-scale: the peaks must follow the
++        // viewport, which is what makes zooming in the UI show anything at all.
++        let mut samples = vec![0.0f32; 12_000];
++        samples.extend(std::iter::repeat(0.75).take(12_000));
++        let w = WaveBuffer::new(samples, 1, 48_000).unwrap();
++
++        let quiet = w.overview_range(0, 12_000, 64);
++        assert!(quiet.iter().all(|p| p.max == 0.0 && p.min == 0.0));
++
++        let loud = w.overview_range(12_000, 12_000, 64);
++        assert!(loud.iter().all(|p| (p.max - 0.75).abs() < 1e-6));
++
++        // A span past the end is clipped rather than panicking.
++        let clipped = w.overview_range(20_000, 50_000, 8);
++        assert_eq!(clipped.len(), 8);
++        assert!(clipped.iter().all(|p| (p.max - 0.75).abs() < 1e-6));
++        assert!(w
++            .overview_range(w.frames(), 1_000, 4)
++            .iter()
++            .all(|p| p.max == 0.0));
++    }
++
++    #[test]
++    fn viewport_span_tracks_zoom_to_selection() {
++        let mut w = mono_ramp();
++        w.set_selection(40, 60);
++        let mut vp = Viewport::new(w.frames());
++        vp.zoom_to_selection(w.selection.start, w.selection.end);
++        assert_eq!(w.visible_span(&vp), (40, 20));
++        // Zooming back out covers the whole buffer again.
++        vp.fit();
++        assert_eq!(w.visible_span(&vp), (0, 100));
++    }
+ }
+diff --git a/waveform/src/view.rs b/waveform/src/view.rs
+index c1e0226..25fa10b 100644
+--- a/waveform/src/view.rs
++++ b/waveform/src/view.rs
+@@ -1,4 +1,9 @@
+-//! Waveform overview for UI (S9.1).
++//! Waveform overview and viewport (S9.1).
++//!
++//! [`peak_overview`] downsamples PCM into a min/max envelope; [`Viewport`] maps
++//! between frames and pixels for a zoomed, scrollable view. The mapping lives
++//! here rather than in the UI so selection, zoom and painting all agree on the
++//! same numbers.
+ 
+ #[derive(Debug, Clone, Copy, Default)]
+ pub struct PeakMinMax {
+@@ -33,3 +38,295 @@ pub fn peak_overview(samples: &[f32], channels: u16, buckets: usize) -> Vec<Peak
+     }
+     out
+ }
++
++/// Most frames the viewport will show at once is the whole buffer; the fewest is
++/// this, so the view can never collapse to a single sample and lose its place.
++pub const MIN_VISIBLE_FRAMES: f64 = 16.0;
++
++/// A zoomed, scrollable window onto the buffer measured in frames.
++///
++/// `start` and `visible` are floating point because a zoomed view rarely aligns
++/// to whole frames, and rounding both on every scroll would make the view drift.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct Viewport {
++    total: usize,
++    start: f64,
++    visible: f64,
++}
++
++impl Default for Viewport {
++    fn default() -> Self {
++        Self::new(0)
++    }
++}
++
++impl Viewport {
++    /// A viewport fitted to `total` frames.
++    pub fn new(total: usize) -> Self {
++        let mut viewport = Self {
++            total,
++            start: 0.0,
++            visible: total.max(1) as f64,
++        };
++        viewport.fit();
++        viewport
++    }
++
++    /// Total number of frames in the buffer.
++    pub fn total(&self) -> usize {
++        self.total
++    }
++
++    /// First visible frame.
++    pub fn start(&self) -> f64 {
++        self.start
++    }
++
++    /// One past the last visible frame.
++    pub fn end(&self) -> f64 {
++        self.start + self.visible
++    }
++
++    /// Number of visible frames.
++    pub fn visible_frames(&self) -> f64 {
++        self.visible
++    }
++
++    /// Whether the whole buffer is visible.
++    pub fn is_fitted(&self) -> bool {
++        self.total == 0 || self.visible >= self.total as f64 - 1e-6
++    }
++
++    /// Frames per pixel across `width` pixels.
++    pub fn frames_per_px(&self, width: f32) -> f64 {
++        self.visible / width.max(1.0) as f64
++    }
++
++    /// Track a new buffer length, keeping the current zoom where it still fits.
++    ///
++    /// A time-stretch changes the frame count under the viewport; the view must
++    /// stay valid afterwards instead of pointing past the end.
++    pub fn set_total(&mut self, total: usize) {
++        if total == self.total {
++            return;
++        }
++        let was_fitted = self.is_fitted();
++        self.total = total;
++        if was_fitted || total == 0 {
++            self.fit();
++        } else {
++            self.visible = self.visible.min(total.max(1) as f64);
++            self.clamp();
++        }
++    }
++
++    /// Show the whole buffer.
++    pub fn fit(&mut self) {
++        self.start = 0.0;
++        self.visible = self.total.max(1) as f64;
++    }
++
++    /// Zoom so the selection fills the view.
++    pub fn zoom_to_selection(&mut self, start_frame: usize, end_frame: usize) {
++        if end_frame <= start_frame {
++            return;
++        }
++        self.start = start_frame as f64;
++        self.visible = (end_frame - start_frame) as f64;
++        self.clamp();
++    }
++
++    /// Centre the view on `frame`, keeping the zoom.
++    pub fn center_on(&mut self, frame: f64) {
++        self.start = frame - self.visible / 2.0;
++        self.clamp();
++    }
++
++    /// Zoom by `factor` (`< 1` zooms in) around the centre of the view.
++    pub fn zoom(&mut self, factor: f32) {
++        let anchor = self.start + self.visible / 2.0;
++        self.zoom_at(anchor, factor);
++    }
++
++    /// Zoom by `factor` (`< 1` zooms in) keeping `anchor_frame` under the cursor.
++    ///
++    /// This is the behaviour that makes wheel zoom feel correct: the frame the
++    /// pointer is over does not move, so zooming never loses the edit point.
++    pub fn zoom_at(&mut self, anchor_frame: f64, factor: f32) {
++        if !factor.is_finite() || factor <= 0.0 {
++            return;
++        }
++        let max_visible = self.total.max(1) as f64;
++        let lower = MIN_VISIBLE_FRAMES.min(max_visible);
++        let new_visible = (self.visible * factor as f64).clamp(lower, max_visible);
++        // Keep the anchor at the same fraction through the view.
++        let frac = if self.visible > 0.0 {
++            (anchor_frame - self.start) / self.visible
++        } else {
++            0.5
++        };
++        self.start = anchor_frame - frac * new_visible;
++        self.visible = new_visible;
++        self.clamp();
++    }
++
++    /// Scroll by a number of frames (positive moves the view later).
++    pub fn pan_frames(&mut self, delta: f64) {
++        self.start += delta;
++        self.clamp();
++    }
++
++    /// Scroll by a number of pixels.
++    pub fn pan_px(&mut self, delta_px: f32, width: f32) {
++        self.pan_frames(delta_px as f64 * self.frames_per_px(width));
++    }
++
++    /// Clamp the window inside the buffer.
++    pub fn clamp(&mut self) {
++        let total = self.total as f64;
++        if self.total == 0 {
++            self.start = 0.0;
++            self.visible = 1.0;
++            return;
++        }
++        self.visible = self
++            .visible
++            .clamp(MIN_VISIBLE_FRAMES.min(total), total.max(1.0));
++        let max_start = (total - self.visible).max(0.0);
++        self.start = self.start.clamp(0.0, max_start);
++    }
++
++    /// Fractional frame under `px` across a `width`-pixel view.
++    pub fn frame_at_f(&self, px: f32, width: f32) -> f64 {
++        let width = width.max(1.0) as f64;
++        self.start + (px as f64 / width).clamp(0.0, 1.0) * self.visible
++    }
++
++    /// Frame under `px`, clamped into the buffer.
++    pub fn frame_at(&self, px: f32, width: f32) -> usize {
++        let frame = self.frame_at_f(px, width).round();
++        frame.clamp(0.0, self.total as f64) as usize
++    }
++
++    /// Pixel offset of `frame` across a `width`-pixel view.
++    pub fn x_of(&self, frame: f64, width: f32) -> f32 {
++        if self.visible <= 0.0 {
++            return 0.0;
++        }
++        (((frame - self.start) / self.visible) * width.max(1.0) as f64) as f32
++    }
++
++    /// Visible frame range as whole frames, clipped to the buffer.
++    pub fn visible_range(&self) -> (usize, usize) {
++        let start = self.start.floor().max(0.0) as usize;
++        let end = self.end().ceil().max(0.0) as usize;
++        (start.min(self.total), end.min(self.total))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const WIDTH: f32 = 800.0;
++
++    #[test]
++    fn new_viewport_is_fitted() {
++        let vp = Viewport::new(48_000);
++        assert!(vp.is_fitted());
++        assert_eq!(vp.start(), 0.0);
++        assert_eq!(vp.visible_frames(), 48_000.0);
++        assert_eq!(vp.visible_range(), (0, 48_000));
++    }
++
++    #[test]
++    fn frame_and_pixel_round_trip() {
++        let mut vp = Viewport::new(48_000);
++        vp.zoom_to_selection(10_000, 14_000);
++        for frame in [10_000.0, 11_234.0, 12_000.0, 13_999.0] {
++            let x = vp.x_of(frame, WIDTH);
++            let back = vp.frame_at_f(x, WIDTH);
++            assert!(
++                (back - frame).abs() < 1.0,
++                "frame {frame} -> x {x} -> {back}"
++            );
++        }
++    }
++
++    #[test]
++    fn zoom_at_keeps_the_frame_under_the_cursor() {
++        let mut vp = Viewport::new(100_000);
++        let px = WIDTH * 0.7;
++        let before = vp.frame_at_f(px, WIDTH);
++        vp.zoom_at(before, 0.25); // zoom in 4x
++        let after = vp.frame_at_f(px, WIDTH);
++        assert!(
++            (after - before).abs() < 2.0,
++            "anchor moved from {before} to {after}"
++        );
++        // And the view really did zoom in.
++        assert!(vp.visible_frames() < 100_000.0 * 0.3);
++    }
++
++    #[test]
++    fn zoom_is_bounded_by_the_buffer_and_a_floor() {
++        let mut vp = Viewport::new(1_000);
++        for _ in 0..80 {
++            vp.zoom(0.5);
++        }
++        assert!(vp.visible_frames() >= MIN_VISIBLE_FRAMES - 1e-9);
++        for _ in 0..80 {
++            vp.zoom(2.0);
++        }
++        assert_eq!(vp.visible_frames(), 1_000.0);
++        assert!(vp.is_fitted());
++        assert_eq!(vp.start(), 0.0);
++    }
++
++    #[test]
++    fn panning_clamps_to_the_buffer_edges() {
++        let mut vp = Viewport::new(10_000);
++        vp.zoom_to_selection(4_000, 6_000); // 2 000 frames visible
++        vp.pan_frames(-50_000.0);
++        assert_eq!(vp.start(), 0.0);
++        vp.pan_frames(50_000.0);
++        assert_eq!(vp.start(), 8_000.0);
++        assert_eq!(vp.end(), 10_000.0);
++    }
++
++    #[test]
++    fn zoom_to_selection_frames_the_edit() {
++        let mut vp = Viewport::new(96_000);
++        vp.zoom_to_selection(24_000, 30_000);
++        assert_eq!(vp.start(), 24_000.0);
++        assert_eq!(vp.visible_frames(), 6_000.0);
++        assert!(!vp.is_fitted());
++    }
++
++    #[test]
++    fn tracking_a_new_total_keeps_the_zoom_valid() {
++        // Fitted view follows the buffer (a stretch from 12k to 18k frames).
++        let mut vp = Viewport::new(12_000);
++        vp.set_total(18_000);
++        assert!(vp.is_fitted());
++        assert_eq!(vp.visible_frames(), 18_000.0);
++
++        // A zoomed view is clamped inside the new length instead of overflowing.
++        let mut vp = Viewport::new(12_000);
++        vp.zoom_to_selection(10_000, 12_000);
++        vp.set_total(6_000);
++        assert!(vp.end() <= 6_000.0 + 1e-6);
++        assert_eq!(vp.start(), 4_000.0);
++    }
++
++    #[test]
++    fn empty_buffer_is_safe() {
++        let mut vp = Viewport::new(0);
++        assert_eq!(vp.frame_at(10.0, WIDTH), 0);
++        assert_eq!(vp.visible_range(), (0, 0));
++        vp.zoom(0.5);
++        vp.pan_frames(100.0);
++        assert_eq!(vp.start(), 0.0);
++        assert_eq!(vp.x_of(0.0, WIDTH), 0.0);
++    }
++}
+-- 
+2.43.0
+
