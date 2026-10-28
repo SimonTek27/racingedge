@@ -3,6 +3,8 @@
 pub mod aero;
 pub mod aero_draft;
 pub mod audio3d;
+#[cfg(feature = "game-audio")]
+pub mod audio_playback;
 pub mod brake_thermal;
 pub mod brakes;
 pub mod camera;
@@ -45,6 +47,10 @@ pub mod weather;
 
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
 pub use audio3d::{bearing_pan, distance_gain, doppler_factor, CarEventVolumes, OtherCarVoice};
+#[cfg(feature = "game-audio")]
+pub use audio_playback::{
+    wav_bytes, CarAudioPlaybackPlugin, EngineVoice, TyreVoice, VOICE_SAMPLE_RATE,
+};
 pub use brake_thermal::{
     BrakeDiscWearState, BrakeFadeState, BrakeFadeType, BrakePadWearState, BrakeThermalConfig,
     BrakeThermalModel, BrakeThermalState, BrakeWearData, BrakeWearSystem,

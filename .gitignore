@@ -15,3 +15,7 @@ Thumbs.db
 # Local runtime artefacts (audio banks, editor output)
 /out/
 *.snapshot
+
+# Local RaMOD clone used for the parity work: its own git repo, published
+# through replica/ramod-fixes.patch instead of being committed here.
+/.vendor/

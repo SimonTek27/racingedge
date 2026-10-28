@@ -9,7 +9,7 @@ extracted and re-authored.
 
 [![CI](https://github.com/SimonTek27/racingedge/actions/workflows/ci.yml/badge.svg)](https://github.com/SimonTek27/racingedge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.97.1%2B-orange.svg)](https://www.rust-lang.org)
 
 ## Layout
 
@@ -32,7 +32,7 @@ extracted and re-authored.
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
 | `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension (incl. kinematic LUTs), brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
 track ambience events from `audio_config.ini`, race HUD/telemetry overlay, dynamic track-surface grip grid (rubbering/marbles/wetness) with banking/elevation models, weather evolution, a 1 kHz fixed-step loop, a replay runtime and a multi-car manager with AI spline following |
-| `src/plugins/` | Game-side Bevy plugins (`physics`) |
+| `src/plugins/` | Game-side Bevy plugins: `physics` (drive loop) and `game` (scene, chase camera, HUD assembly) |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
 | `src/bin/racingedge_server.rs` | The headless dedicated server (`racingedge-server`) |
@@ -67,9 +67,42 @@ parsers.
 
 > **Note** — the project tracks the **latest released Bevy** and adapts to it
 > (see `AGENTS.md` "Rule 1"); it currently builds against **Bevy 0.20**.
-> `src/simulator/` is wired into the crate and compiled/tested by CI. Its systems
-> are not yet assembled into the game binary — that work is tracked in
-> [docs/KSENGINE_PORT_BACKLOG.md](docs/KSENGINE_PORT_BACKLOG.md).
+> `src/simulator/` is wired into the crate, compiled/tested by CI, and assembled
+> into the game binary by `src/plugins/`: `PhysicsPlugin` steps the real
+> `VehicleState` on the 1 kHz loop with keyboard input and the auto-shifted
+> `GearboxModel`, and `GamePlugin` adds the scene, the `CameraController`-driven
+> camera, the race HUD and the car audio (engine layer mix, cockpit / exterior
+> split, tyre rolling and skid layers). The mix is audible: `audio_playback`
+> gives every engine layer and the two tyre loops a Bevy `AudioPlayer` and drives
+> its `AudioSink` volume and pitch from the layer weights, so engine note, wind-up
+> and tyre rumble follow the car. Everything else in the port backlog is tracked
+> in [docs/KSENGINE_PORT_BACKLOG.md](docs/KSENGINE_PORT_BACKLOG.md).
+
+## Driving the game
+
+```sh
+cargo run --release
+```
+
+| Key | Action |
+| --- | --- |
+| `W` / `↑` | Throttle |
+| `S` / `↓` | Brake |
+| `A` `D` / `←` `→` | Steer |
+| `C` | Chase ⇄ cockpit camera (also moves the engine mix interior) |
+| `F2` | Cycle race HUD mode |
+| `F1` | FSB bank browser |
+| `P` | Preview the first playable bank sample |
+
+The gearbox shifts automatically from the car's own ratios.
+
+The whole game layer is one plugin, `racingedge::plugins::RacingEdgeGamePlugin`
+(vehicle physics + scene, camera, HUD and audio), so it can be hosted by another
+Bevy runner. Renzora — a Bevy-based engine and editor — is the intended second
+host: `renzora/racingedge_plugin/` holds the wrapper crate and
+[docs/RENZORA_MIGRATION.md](docs/RENZORA_MIGRATION.md) the verified facts and the
+remaining steps. Build with `--no-default-features` to drop the `game-audio`
+playback layer (Renzora ships its own mixer and never enables `bevy_audio`).
 
 ## The `rea_bridge` CLI
 
@@ -161,6 +194,13 @@ guaranteed to be readable by the suite.
   loop regions, change sample rates, replace PCM payloads from WAV files, and
   create banks from scratch. Codec metadata chunks, header fields and untouched
   samples are preserved, and re-serialisation is idempotent.
+* **Hear the car**: `simulator::audio_playback` turns the `CarSound` mix into
+  sound — one looping `AudioPlayer` per engine layer (the interior set in
+  cockpit view, the exterior set otherwise) plus synthesised tyre rolling and
+  skid loops — and updates each voice's volume and playback speed from the layer
+  weights and surface volumes every frame. The engine set the camera does not
+  select is paused rather than mixed at zero gain, the cheap half of FMOD-style
+  virtual voices.
 * **Play** banks in-game: the `AudioPlugin` loads FSB banks into Bevy
   `AudioSource` assets (WAV for PCM, Ogg for Vorbis), so samples can be previewed
   and driven by gameplay. Point it at a bank with the `RACINGEDGE_BANKS`
@@ -297,9 +337,9 @@ guaranteed to be readable by the suite.
 
 1. Batch conversion and sample grafting (`--into` to add or replace a sample
    inside an existing bank).
-2. Assemble the `src/simulator/` runtime into the game binary (physics plugin,
-   cockpit HUD, car audio) — the plumbing is tracked in the
-   [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
+2. Finish the `src/simulator/` runtime in the game binary: car audio
+   (`CarSoundPlugin`), the session/`FeatureHub` flow, menus and the garage UI —
+   the plumbing is tracked in the [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
 3. Continue the ksengine port backlog: the remaining track/model formats,
    the Phase 2 driving-experience items (garage/pit, cameras, HUD),
    multiplayer sync and the AC shared-memory bridge.
@@ -308,3 +348,18 @@ guaranteed to be readable by the suite.
 
 Released under the [GNU General Public License v3.0](LICENSE)
 (`GPL-3.0-or-later`).
+
+## RaMOD audio parity (measured, not claimed)
+
+RaMOD lives in its own repository; the artifacts below are the recon, the score and the repair
+patch produced against its `main`.
+
+- [`replica/features.csv`](replica/features.csv) — feature matrix, each cell with its evidence.
+- [`replica/parity.py`](replica/parity.py) — the replica-diff scorer (MIT, from the replica skill).
+  Current score: **79.2 / 100**, must-haves 16 of 20.
+- [`replica/recon.md`](replica/recon.md) — recon notes, including where the matrix was corrected
+  against the real `runtime/` code rather than the roadmap.
+- [`replica/ramod-repairs.md`](replica/ramod-repairs.md) — why RaMOD would not build, what was
+  reconstructed, and what remains unproven.
+- [`replica/ramod-fixes.patch`](replica/ramod-fixes.patch) — the same fixes as a patch against RaMOD.
+

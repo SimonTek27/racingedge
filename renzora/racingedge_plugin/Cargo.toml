@@ -1,0 +1,32 @@
+[package]
+name = "racingedge_game"
+version = "0.1.0"
+edition = "2021"
+description = "Renzora runtime plugin that installs the racingedge game layer"
+license = "GPL-3.0-or-later"
+publish = false
+
+# This crate is NOT part of the racingedge workspace. It is meant to be copied
+# into a Renzora checkout as `engine/crates/racingedge_game/`, which is the only
+# place its `bevy`/`renzora` dependencies resolve. The `[workspace]` table keeps
+# our own `cargo` commands from touching it. See docs/RENZORA_MIGRATION.md.
+[workspace]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Inside the Renzora workspace these MUST be the workspace entries: the engine
+# builds Bevy with `default-features = false` and never enables `bevy_audio`
+# (its audio is `renzora_audio`), and a member that named `bevy = "0.20"` with
+# default features would re-enable it for the whole unified build.
+bevy = { workspace = true }
+renzora = { path = "../renzora" }
+
+# The game itself. `default-features = false` drops `game-audio`, i.e. the
+# `bevy_audio` playback layer this engine cannot run; the mix models stay.
+[dependencies.racingedge]
+git = "https://github.com/SimonTek27/racingedge"
+default-features = false
+# For local iteration point this at the checkout instead:
+# path = "../../../racingedge"

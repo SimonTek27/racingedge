@@ -18,6 +18,8 @@ use bevy::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "game-audio")]
+use crate::simulator::audio_playback::CarAudioPlaybackPlugin;
 use crate::simulator::physics::{VehicleConfig, VehicleState};
 use crate::simulator::rebank::{ensure_default_rebank, load_rebank, RebankBuilder};
 
@@ -616,7 +618,8 @@ impl CarSound {
         self.last_mix_peak = self.estimate_peak();
     }
 
-    fn engine_gain(&self) -> f32 {
+    /// Engine mix gain for the current rpm, load, camera and volumes.
+    pub fn engine_gain(&self) -> f32 {
         let load = self.state.throttle.max(0.08);
         let rpm_n = ((self.state.rpm - self.meta.rpm_min)
             / (self.meta.rpm_max - self.meta.rpm_min).max(1.0))
@@ -778,6 +781,10 @@ impl Plugin for CarSoundPlugin {
         app.init_resource::<CarSound>()
             .init_resource::<CommonSound>()
             .add_systems(Update, (update_car_sound, debug_car_sound));
+        // The voices need `bevy_audio`; a host that brings its own mixer builds
+        // without the `game-audio` feature and keeps the mix models only.
+        #[cfg(feature = "game-audio")]
+        app.add_plugins(CarAudioPlaybackPlugin);
     }
 }
 

@@ -99,6 +99,27 @@ Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
 `cargo test --all-targets` (517 unit tests) and `cargo test --doc` (17 doc tests)
 all pass.
 
+## App layer (game binary)
+
+`src/main.rs` is a plugin list:
+
+| Plugin | What it assembles |
+| --- | --- |
+| `plugins::physics::PhysicsPlugin` | the car entity with `VehicleState`, keyboard driving input, the [`SimulationLoop`](../src/simulator/loop.rs) 1 kHz fixed step calling `step_vehicle`, `AutoGearbox` driving `GearboxModel::auto_shift` from the configured ratios, and `integrate_transform` |
+| `plugins::game::GamePlugin` | light + stand-in ground plane, the `Camera3d` driven by `simulator::camera::CameraController` (chase ⇄ cockpit on `C`), and the `hud` race overlay + `cockpit` instruments |
+| `editor::audio::AudioPlugin` | FSB banks → Bevy audio assets and the `F1` bank browser |
+| `simulator::car_sound::CarSoundPlugin` | engine layer mix from `VehicleState` (rpm/load/gear/speed), the cockpit/exterior split from the active camera, and the tyre rolling/skid layers through `CommonSound::set_surface` |
+| `simulator::audio_playback::CarAudioPlaybackPlugin` | the audible side of that mix: one looping `AudioPlayer` per engine layer (interior and exterior sets) plus synthesised tyre rolling/skid loops, with `AudioSink` volume and playback speed driven by `EngineLayer::weight_at_rpm` and `CommonSound::volumes`; the camera-inactive engine set is paused rather than mixed at zero gain (`engine_voice_audible`) |
+
+Engine layers come from the `.rebank` when one is present and from the
+in-memory synth otherwise; both are made loop-safe with a 50 ms crossfade and
+encoded to 16-bit WAV in memory, so no audio files are shipped for the voice
+layer. One-shots (backfire, gear shift, limiter) and wind are still model-only
+in `CarSound::playback`.
+
+Still deferred to the app: `FeatureHub` session flow and menus, the garage/setup
+screen, replay playback and the `MultiCarManager`/AI field.
+
 ---
 
 ## 1. Already ported

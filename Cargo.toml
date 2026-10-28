@@ -8,6 +8,19 @@ description = "Rust/Bevy racing game plus an FSB5 audio content-modding suite"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/SimonTek27/racingedge"
 readme = "README.md"
+# `renzora/` is a crate for the *Renzora* workspace, not for this one: its
+# `bevy`/`renzora` deps only resolve inside a Renzora checkout (see
+# docs/RENZORA_MIGRATION.md), so keep it out of `cargo package`/publish.
+exclude = ["renzora/"]
+
+[features]
+default = ["game-audio"]
+# Audible car audio through `bevy_audio` (`simulator::audio_playback`). Bevy's
+# own `audio` feature is part of its default set, so this gates OUR playback
+# layer only: a host that brings its own mixer (Renzora ships `renzora_audio`
+# and never enables `bevy_audio`) builds with `--no-default-features` and keeps
+# the mix models without the voices.
+game-audio = []
 
 [lib]
 # `rlib` for the game binary and CLI, `cdylib` so C hosts can link the `c_api`
