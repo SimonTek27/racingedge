@@ -1,7 +1,8 @@
 From 18436a278f44abca2656bcef4e6a5a07d1b4746e Mon Sep 17 00:00:00 2001
 From: Simone Rizzo <35865705+SimonTek27@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 11:16:39 +0000
-Subject: [PATCH] fix: restore the build and add a real waveform effect chain
+Subject: [PATCH 1/2] fix: restore the build and add a real waveform effect
+ chain
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -4824,6 +4825,1191 @@ index c1e0226..25fa10b 100644
 +        assert_eq!(vp.x_of(0.0, WIDTH), 0.0);
 +    }
 +}
+-- 
+2.43.0
+
+
+From e2cda267dc417be99744e6fb27e7860738308e6f Mon Sep 17 00:00:00 2001
+From: SimonTek27 <SimonTek27@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 10:21:05 +0000
+Subject: [PATCH 2/2] fix(editor): rebuild the lost AudioBridge and project
+ model
+
+The editor crate did not compile: audio_bridge.rs was a 115-line stub whose body
+had been truncated, and project.rs had lost its path field, the
+track/instrument/asset constructors, FxPreset and a bank build that returned a
+count instead of the built path. The corrupt recovery/ab.z0 blob cannot restore
+them, so both modules are rebuilt against the real ramod_runtime API.
+
+- AudioBridge drives Runtime/Mixer directly: project sync with per-event
+  signatures so only changed events re-register, cached asset PCM, event play
+  with parameter re-apply, PCM preview, frame-clock rendering via pump(), bus
+  meters, inserts, snapshots, 3D listener/emitter and FX preset capture/apply.
+- project.rs: path field, FxPreset, TrackEntry::new, add_track,
+  add_instrument, add_asset_file, EventEntry::to_designed, and a bank build that
+  writes a real BankManifest instead of the placeholder Ok(0).
+- Runtime gains capture_snapshot_base, capture_named_snapshot and
+  snapshot_names, which the snapshot UI needs and the engine never exposed.
+
+Tests: 11 editor (bridge replay is audible through the mixer), 6 runtime,
+27 waveform, 47 ramod.
+---
+ editor/src/audio_bridge.rs    | 673 ++++++++++++++++++++++++++++++++--
+ editor/src/project.rs         | 281 +++++++++++++-
+ runtime/src/runtime_core_b.rs |  15 +
+ 3 files changed, 936 insertions(+), 33 deletions(-)
+
+diff --git a/editor/src/audio_bridge.rs b/editor/src/audio_bridge.rs
+index cf57460..594adb3 100644
+--- a/editor/src/audio_bridge.rs
++++ b/editor/src/audio_bridge.rs
+@@ -1,23 +1,70 @@
+ //! Transport Play → ramod_runtime (audible via cpal when available).
++//!
++//! The bridge is the only place the editor touches the engine: it registers the
++//! project's events with the [`Runtime`], drives rendering from the UI frame
++//! clock ([`AudioBridge::pump`]), and exposes the mixer / profiler state the
++//! events are authored against.
+ 
++use std::collections::hash_map::DefaultHasher;
++use std::collections::HashMap;
++use std::hash::{Hash, Hasher};
+ use std::path::Path;
+ 
+ use ramod_runtime::{
+-    Ahdsr, Attenuation, Attributes3d, AutomationCurve, BusId, BusMeterInfo, DesignedEvent,
+-    EmitterDebug, EventDescription, InsertEffect, InstrumentDef, PlayParams, Runtime,
+-    RuntimeConfig, TimelineTrack, TransitionMarker, Vec3, StealingMode,
++    Attributes3d, BufferHandle, BusId, BusMeterInfo, EmitterDebug, InsertEffect, PlayParams,
++    Runtime, RuntimeConfig, Vec3, VoiceHandle,
+ };
+ use ramod_waveform::WaveBuffer;
+ 
+-use crate::project::{
+-    AssetEntry, EventEntry, InstrumentKindEntry, Project, StealingMode as ProjectStealing,
+-};
++use crate::project::{AssetEntry, EventEntry, Project};
++
++/// One row per insert slot, for the profiler's FX editor.
++#[derive(Debug, Clone, PartialEq)]
++pub struct BusInsertInfo {
++    pub bus_id: u32,
++    pub index: usize,
++    /// `Gain` | `LowPass` | `HighPass` | `Compressor` | `Sidechain` | `Reverb`.
++    pub kind: String,
++    pub p0: f32,
++    pub p1: f32,
++    pub p2: f32,
++    /// Side-chain key bus (only meaningful for `Sidechain`).
++    pub source_bus: String,
++}
++
++/// Everything the profiler panel draws, captured without holding the runtime.
++#[derive(Debug, Clone, Default)]
++pub struct ProfilerSnapshot {
++    pub session_frames: usize,
++    pub cpu_render_us: u32,
++    pub avg_cpu_us: f32,
++    pub active_voices: usize,
++    pub peak_voices: usize,
++    pub cpu_history: Vec<u32>,
++    pub voice_history: Vec<u32>,
++    pub bus_meters: Vec<BusMeterInfo>,
++    pub insert_counts: Vec<(u32, usize)>,
++    pub bus_inserts: Vec<BusInsertInfo>,
++    pub snapshot_names: Vec<String>,
++    /// Listener position `(x, y, z)` in metres.
++    pub listener: (f32, f32, f32),
++    pub emitters: Vec<EmitterDebug>,
++}
+ 
+ pub struct AudioBridge {
+     rt: Runtime,
+-    registered: Vec<String>,
++    /// Signature of the event definition last handed to the runtime.
++    registered: HashMap<String, u64>,
++    /// Decoded PCM per asset, keyed by source path or demo tone.
++    asset_cache: HashMap<String, BufferHandle>,
+     playing_id: Option<u64>,
+-    preview_voice: Option<ramod_runtime::VoiceHandle>,
++    preview_voice: Option<VoiceHandle>,
++    /// Parameter values re-applied to every new instance.
++    parameters: HashMap<String, f32>,
++    listener_pos: (f32, f32, f32),
++    listener_vel: (f32, f32, f32),
++    emitter_pos: (f32, f32, f32),
++    emitter_vel: (f32, f32, f32),
+ }
+ 
+ impl AudioBridge {
+@@ -42,55 +89,66 @@ impl AudioBridge {
+         };
+         let mut bridge = Self {
+             rt,
+-            registered: Vec::new(),
++            registered: HashMap::new(),
++            asset_cache: HashMap::new(),
+             playing_id: None,
+             preview_voice: None,
++            parameters: HashMap::new(),
++            listener_pos: (0.0, 0.0, 0.0),
++            listener_vel: (0.0, 0.0, 0.0),
++            emitter_pos: (0.0, 0.0, 10.0),
++            emitter_vel: (0.0, 0.0, 0.0),
+         };
+         bridge.rt.profiler_enable(true);
+         Ok(bridge)
+     }
+ 
++    #[allow(dead_code)]
+     pub fn runtime_mut(&mut self) -> &mut Runtime {
+         &mut self.rt
+     }
+ 
++    #[allow(dead_code)]
+     pub fn runtime(&self) -> &Runtime {
+         &self.rt
+     }
+ 
++    // ---------------------------------------------------------------- mixing
++
+     pub fn set_bus_volume_db(&mut self, bus_id: u32, db: f32) {
+-        self.rt.set_bus_volume_db(BusId(bus_id), db.clamp(-60.0, 24.0));
++        self.rt
++            .set_bus_volume_db(BusId(bus_id), db.clamp(-60.0, 24.0));
+     }
+ 
++    #[allow(dead_code)] // mixer API exposed for the send UI
+     pub fn set_bus_send_reverb(&mut self, bus_id: u32, level: f32) {
+         self.rt
+-            .set_bus_send_level(BusId(bus_id), "Reverb", level.clamp(0.0, 1.0));
++            .mixer_mut()
++            .set_send_level(BusId(bus_id), "Reverb", level.clamp(0.0, 1.0));
+     }
+ 
+     pub fn toggle_bus_mute(&mut self, bus_id: u32) {
+-        let id = BusId(bus_id);
+         let muted = self
+             .rt
+-            .list_bus_meters()
+-            .iter()
+-            .find(|b| b.id == bus_id)
++            .mixer()
++            .bus(BusId(bus_id))
+             .map(|b| b.mute)
+             .unwrap_or(false);
+-        self.rt.set_bus_mute(id, !muted);
++        self.rt.set_bus_mute(BusId(bus_id), !muted);
+     }
+ 
+     pub fn toggle_bus_solo(&mut self, bus_id: u32) {
+-        let id = BusId(bus_id);
+         let solo = self
+             .rt
+-            .list_bus_meters()
+-            .iter()
+-            .find(|b| b.id == bus_id)
++            .mixer()
++            .bus(BusId(bus_id))
+             .map(|b| b.solo)
+             .unwrap_or(false);
+-        self.rt.set_bus_solo(id, !solo);
++        self.rt.set_bus_solo(BusId(bus_id), !solo);
+     }
+ 
++    // ------------------------------------------------------------- transport
++
+     pub fn stop(&mut self) {
+         if let Some(id) = self.playing_id.take() {
+             self.rt.release_instance(id);
+@@ -98,18 +156,583 @@ impl AudioBridge {
+         if let Some(v) = self.preview_voice.take() {
+             self.rt.stop(v);
+         }
+-        self.rt.clear_scheduled();
+     }
+ 
++    /// Register every event of `project` with the runtime.
++    ///
++    /// Asset PCM is decoded once and cached; an event is only re-registered when
++    /// its authored definition actually changed.
+     pub fn sync_project(&mut self, project: &Project) {
+-        // Full implementation restored in subsequent push if truncated by transport.
+-        // See artifacts/audio_bridge_restored.rs for complete body.
+-        let _ = project;
++        let mut slot_of: Vec<Option<usize>> = Vec::with_capacity(project.assets.len());
++        let mut handles: Vec<BufferHandle> = Vec::new();
++        for asset in &project.assets {
++            let key = asset_key(asset);
++            let handle = match self.asset_cache.get(&key).copied() {
++                Some(h) => Some(h),
++                None => {
++                    let loaded = self.load_asset(asset);
++                    if let Some(h) = loaded {
++                        self.asset_cache.insert(key, h);
++                    }
++                    loaded
++                }
++            };
++            match handle {
++                Some(h) => {
++                    handles.push(h);
++                    slot_of.push(Some(handles.len() - 1));
++                }
++                None => slot_of.push(None),
++            }
++        }
++
++        for event in &project.events {
++            let signature = event_signature(event);
++            if self.registered.get(&event.path) == Some(&signature) {
++                continue;
++            }
++            let Some(designed) = remap_slots(event, &slot_of) else {
++                continue;
++            };
++            if self.rt.register_designed_event(designed, &handles).is_ok() {
++                self.registered.insert(event.path.clone(), signature);
++            }
++        }
+     }
+ 
+     pub fn play_event(&mut self, path: &str) -> Result<(), String> {
++        if let Some(id) = self.playing_id.take() {
++            self.rt.release_instance(id);
++        }
++        if let Some(v) = self.preview_voice.take() {
++            self.rt.stop(v);
++        }
+         let id = self.rt.play_event(path).map_err(|e| e.to_string())?;
+         self.playing_id = Some(id);
++        let parameters: Vec<(String, f32)> = self
++            .parameters
++            .iter()
++            .map(|(k, v)| (k.clone(), *v))
++            .collect();
++        for (name, value) in parameters {
++            self.rt.set_instance_parameter(id, &name, value);
++        }
++        self.apply_emitter();
+         Ok(())
+     }
++
++    /// Set a named parameter on the live instance (and remember it for replays).
++    pub fn set_parameter(&mut self, name: &str, value: f32) {
++        self.parameters.insert(name.to_string(), value);
++        if let Some(id) = self.playing_id {
++            self.rt.set_instance_parameter(id, name, value);
++        }
++        if let (Some(voice), true) = (self.preview_voice, name.eq_ignore_ascii_case("Intensity")) {
++            self.rt.set_voice_gain(voice, value.clamp(0.0, 4.0));
++        }
++    }
++
++    pub fn master_levels(&self) -> (f32, f32) {
++        let mixer = self.rt.mixer();
++        mixer
++            .bus(mixer.master_id())
++            .map(|b| (b.meter.peak, b.meter.rms))
++            .unwrap_or((0.0, 0.0))
++    }
++
++    /// Preview raw PCM (waveform editor) on its own voice.
++    pub fn play_pcm(
++        &mut self,
++        samples: Vec<f32>,
++        channels: u16,
++        sample_rate: u32,
++    ) -> Result<(), String> {
++        if samples.is_empty() {
++            return Err("buffer is empty".into());
++        }
++        if let Some(v) = self.preview_voice.take() {
++            self.rt.stop(v);
++        }
++        if let Some(id) = self.playing_id.take() {
++            self.rt.release_instance(id);
++        }
++        let buffer = self
++            .rt
++            .load_pcm(samples, channels, sample_rate)
++            .map_err(|e| e.to_string())?;
++        let voice = self
++            .rt
++            .play(
++                buffer,
++                PlayParams {
++                    gain: 1.0,
++                    looped: false,
++                },
++            )
++            .map_err(|e| e.to_string())?;
++        self.preview_voice = Some(voice);
++        Ok(())
++    }
++
++    /// Render one UI frame of audio; the runtime pushes it to the device.
++    pub fn pump(&mut self, dt: f32) {
++        let dt = dt.clamp(0.0, 0.25);
++        let channels = self.rt.channels().max(1) as usize;
++        let frames = (dt * self.rt.sample_rate() as f32).round() as usize;
++        if frames == 0 {
++            return;
++        }
++        let mut out = vec![0.0f32; frames * channels];
++        self.rt.render(&mut out);
++    }
++
++    // ------------------------------------------------------------- profiler
++
++    pub fn profiler_snapshot(&self) -> ProfilerSnapshot {
++        let session = self.rt.profiler_session();
++        let frames = &session.frames;
++        const HISTORY: usize = 120;
++        let start = frames.len().saturating_sub(HISTORY);
++        let window = &frames[start..];
++
++        let mut bus_meters: Vec<BusMeterInfo> = self
++            .rt
++            .mixer()
++            .buses()
++            .map(|b| BusMeterInfo {
++                id: b.id.0,
++                name: b.name.clone(),
++                peak: b.meter.peak,
++                rms: b.meter.rms,
++                mute: b.mute,
++                solo: b.solo,
++                volume_db: b.volume_db,
++                send_reverb: self.rt.mixer().send_level(b.id, "Reverb"),
++                is_return: b.is_return,
++                parent_id: b.parent.map(|p| p.0),
++            })
++            .collect();
++        bus_meters.sort_by_key(|b| b.id);
++
++        let mut insert_counts = Vec::new();
++        let mut bus_inserts = Vec::new();
++        for bus in self.rt.mixer().buses() {
++            insert_counts.push((bus.id.0, bus.inserts.len()));
++            for (index, fx) in bus.inserts.iter().enumerate() {
++                bus_inserts.push(insert_info(bus.id.0, index, fx));
++            }
++        }
++        insert_counts.sort_by_key(|(id, _)| *id);
++        bus_inserts.sort_by(|a, b| a.bus_id.cmp(&b.bus_id).then(a.index.cmp(&b.index)));
++
++        let mut emitters = session
++            .latest()
++            .map(|f| f.emitters.clone())
++            .unwrap_or_default();
++        if emitters.is_empty() && self.playing_id.is_some() {
++            emitters.push(EmitterDebug {
++                position: Vec3::new(self.emitter_pos.0, self.emitter_pos.1, self.emitter_pos.2),
++                velocity: Vec3::new(self.emitter_vel.0, self.emitter_vel.1, self.emitter_vel.2),
++                audibility: 1.0,
++            });
++        }
++
++        ProfilerSnapshot {
++            session_frames: session.len(),
++            cpu_render_us: self.rt.last_render_cpu_us(),
++            avg_cpu_us: session.avg_cpu_us(),
++            active_voices: self.rt.active_voices(),
++            peak_voices: session.peak_voices(),
++            cpu_history: window.iter().map(|f| f.cpu_render_us).collect(),
++            voice_history: window.iter().map(|f| f.active_voices as u32).collect(),
++            bus_meters,
++            insert_counts,
++            bus_inserts,
++            snapshot_names: self.rt.snapshot_names(),
++            listener: self.listener_pos,
++            emitters,
++        }
++    }
++
++    pub fn profiler_clear(&mut self) {
++        self.rt.profiler_clear();
++    }
++
++    pub fn profiler_ndjson(&self) -> String {
++        self.rt.profiler_session().to_ndjson()
++    }
++
++    // ------------------------------------------------------------ snapshots
++
++    pub fn capture_snapshot_base(&mut self) {
++        self.rt.capture_snapshot_base();
++    }
++
++    pub fn capture_named_snapshot(&mut self, name: &str) {
++        let name = name.trim();
++        if !name.is_empty() {
++            self.rt.capture_named_snapshot(name);
++        }
++    }
++
++    pub fn trigger_snapshot(&mut self, name: &str, weight: f32) {
++        self.rt.trigger_snapshot(name, weight);
++    }
++
++    pub fn clear_snapshot(&mut self) {
++        self.rt.clear_snapshot();
++    }
++
++    // ------------------------------------------------------------------- 3D
++
++    pub fn set_emitter_xz(&mut self, x: f32, z: f32, vx: f32, vz: f32) {
++        self.emitter_pos = (x, 0.0, z);
++        self.emitter_vel = (vx, 0.0, vz);
++        self.apply_emitter();
++    }
++
++    pub fn set_listener_xz(&mut self, x: f32, z: f32, vx: f32, vz: f32) {
++        self.listener_pos = (x, 0.0, z);
++        self.listener_vel = (vx, 0.0, vz);
++        self.rt.set_listener(Attributes3d {
++            position: Vec3::new(x, 0.0, z),
++            velocity: Vec3::new(vx, 0.0, vz),
++            ..Default::default()
++        });
++    }
++
++    fn apply_emitter(&mut self) {
++        let Some(id) = self.playing_id else {
++            return;
++        };
++        self.rt.set_instance_3d(
++            id,
++            Attributes3d {
++                position: Vec3::new(self.emitter_pos.0, self.emitter_pos.1, self.emitter_pos.2),
++                velocity: Vec3::new(self.emitter_vel.0, self.emitter_vel.1, self.emitter_vel.2),
++                ..Default::default()
++            },
++        );
++    }
++
++    // ------------------------------------------------------------- bus FX
++
++    pub fn add_bus_lowpass(&mut self, bus_id: u32) {
++        self.add_insert(bus_id, InsertEffect::lowpass(8_000.0));
++    }
++
++    pub fn add_bus_highpass(&mut self, bus_id: u32) {
++        self.add_insert(bus_id, InsertEffect::highpass(80.0));
++    }
++
++    pub fn add_bus_compressor(&mut self, bus_id: u32) {
++        self.add_insert(bus_id, InsertEffect::compressor(-18.0, 4.0, 6.0));
++    }
++
++    pub fn add_bus_sidechain(&mut self, bus_id: u32) {
++        self.add_insert(
++            bus_id,
++            InsertEffect::sidechain_compressor(-20.0, 6.0, 4.0, "SFX"),
++        );
++    }
++
++    pub fn add_bus_reverb(&mut self, bus_id: u32) {
++        self.add_insert(bus_id, InsertEffect::reverb(55.0, 0.4, 0.35));
++    }
++
++    fn add_insert(&mut self, bus_id: u32, effect: InsertEffect) {
++        self.rt.mixer_mut().add_insert(BusId(bus_id), effect);
++    }
++
++    pub fn clear_bus_inserts(&mut self, bus_id: u32) {
++        self.rt.mixer_mut().clear_inserts(BusId(bus_id));
++    }
++
++    pub fn remove_bus_insert(&mut self, bus_id: u32, index: usize) {
++        self.rt.mixer_mut().remove_insert(BusId(bus_id), index);
++    }
++
++    /// Apply edited parameters to an existing insert slot.
++    pub fn set_bus_insert_info(&mut self, info: &BusInsertInfo) {
++        let Some(effect) = info_to_insert(info) else {
++            return;
++        };
++        self.rt
++            .mixer_mut()
++            .set_insert(BusId(info.bus_id), info.index, effect);
++    }
++
++    /// Capture every bus insert as `bus|Kind|p0|p1|p2|source` strings.
++    pub fn capture_fx_chain(&self) -> Vec<String> {
++        let mut chain: Vec<String> = self
++            .rt
++            .mixer()
++            .buses()
++            .flat_map(|bus| {
++                bus.inserts
++                    .iter()
++                    .enumerate()
++                    .map(move |(index, fx)| encode_insert(bus.id.0, index, fx))
++            })
++            .collect();
++        chain.sort();
++        chain
++    }
++
++    /// Replace the whole FX graph with a captured chain.
++    pub fn apply_fx_chain(&mut self, chain: &[String]) {
++        let bus_ids: Vec<u32> = self.rt.mixer().buses().map(|b| b.id.0).collect();
++        for id in bus_ids {
++            self.rt.mixer_mut().clear_inserts(BusId(id));
++        }
++        for entry in chain {
++            let Some(info) = decode_insert(entry) else {
++                continue;
++            };
++            if let Some(effect) = info_to_insert(&info) {
++                self.rt.mixer_mut().add_insert(BusId(info.bus_id), effect);
++            }
++        }
++    }
++
++    // -------------------------------------------------------------- assets
++
++    fn load_asset(&mut self, asset: &AssetEntry) -> Option<BufferHandle> {
++        let (samples, channels, sample_rate) = match &asset.source_path {
++            Some(path) => {
++                let buffer = WaveBuffer::from_file(Path::new(path)).ok()?;
++                (buffer.samples, buffer.channels, buffer.sample_rate)
++            }
++            None => {
++                let rate = self.rt.sample_rate();
++                (
++                    synth_tone(asset.demo_freq_hz.unwrap_or(440.0), 0.5, rate),
++                    1,
++                    rate,
++                )
++            }
++        };
++        self.rt.load_pcm(samples, channels, sample_rate).ok()
++    }
++}
++
++fn asset_key(asset: &AssetEntry) -> String {
++    match (&asset.source_path, asset.demo_freq_hz) {
++        (Some(path), _) => format!("file:{path}"),
++        (None, Some(hz)) => format!("tone:{hz}"),
++        (None, None) => format!("asset:{}", asset.name),
++    }
++}
++
++/// FNV-style signature over the serialized definition.
++fn event_signature(event: &EventEntry) -> u64 {
++    let mut hasher = DefaultHasher::new();
++    serde_json::to_string(event)
++        .unwrap_or_default()
++        .hash(&mut hasher);
++    hasher.finish()
++}
++
++/// Copy the authored event and rewrite asset indices to packed buffer slots.
++///
++/// Returns `None` when the event has nothing playable (no tracks/instruments, or
++/// an instrument whose asset never decoded).
++fn remap_slots(
++    event: &EventEntry,
++    slot_of: &[Option<usize>],
++) -> Option<ramod_runtime::DesignedEvent> {
++    let mut designed = event.to_designed();
++    if designed.tracks.is_empty() {
++        return None;
++    }
++    for track in &mut designed.tracks {
++        for instrument in &mut track.instruments {
++            let mut slots = Vec::with_capacity(instrument.buffer_slots.len());
++            for asset_index in &instrument.buffer_slots {
++                slots.push(slot_of.get(*asset_index).copied().flatten()?);
++            }
++            if slots.is_empty() {
++                return None;
++            }
++            instrument.buffer_slots = slots;
++        }
++    }
++    Some(designed)
++}
++
++fn synth_tone(freq: f32, seconds: f32, sample_rate: u32) -> Vec<f32> {
++    let frames = (seconds.max(0.01) * sample_rate as f32) as usize;
++    let fade = (frames / 20).max(1);
++    (0..frames)
++        .map(|i| {
++            let t = i as f32 / sample_rate as f32;
++            let env = if i < fade {
++                i as f32 / fade as f32
++            } else if i + fade > frames {
++                (frames - i) as f32 / fade as f32
++            } else {
++                1.0
++            };
++            0.3 * env * (2.0 * std::f32::consts::PI * freq.max(20.0) * t).sin()
++        })
++        .collect()
++}
++
++fn insert_info(bus_id: u32, index: usize, effect: &InsertEffect) -> BusInsertInfo {
++    let (kind, p0, p1, p2, source_bus) = match effect {
++        InsertEffect::Gain { gain_db } => ("Gain", *gain_db, 0.0, 0.0, String::new()),
++        InsertEffect::LowPass { cutoff_hz } => ("LowPass", *cutoff_hz, 0.0, 0.0, String::new()),
++        InsertEffect::HighPass { cutoff_hz } => ("HighPass", *cutoff_hz, 0.0, 0.0, String::new()),
++        InsertEffect::Compressor {
++            threshold_db,
++            ratio,
++            makeup_db,
++        } => (
++            "Compressor",
++            *threshold_db,
++            *ratio,
++            *makeup_db,
++            String::new(),
++        ),
++        InsertEffect::SidechainCompressor {
++            threshold_db,
++            ratio,
++            makeup_db,
++            source_bus,
++        } => (
++            "Sidechain",
++            *threshold_db,
++            *ratio,
++            *makeup_db,
++            source_bus.clone(),
++        ),
++        InsertEffect::Reverb {
++            delay_ms,
++            feedback,
++            wet,
++        } => ("Reverb", *delay_ms, *feedback, *wet, String::new()),
++    };
++    BusInsertInfo {
++        bus_id,
++        index,
++        kind: kind.to_string(),
++        p0,
++        p1,
++        p2,
++        source_bus,
++    }
++}
++
++fn info_to_insert(info: &BusInsertInfo) -> Option<InsertEffect> {
++    Some(match info.kind.as_str() {
++        "Gain" => InsertEffect::gain(info.p0),
++        "LowPass" => InsertEffect::lowpass(info.p0),
++        "HighPass" => InsertEffect::highpass(info.p0),
++        "Compressor" => InsertEffect::compressor(info.p0, info.p1.max(1.0), info.p2),
++        "Sidechain" => InsertEffect::sidechain_compressor(
++            info.p0,
++            info.p1.max(1.0),
++            info.p2,
++            if info.source_bus.is_empty() {
++                "SFX"
++            } else {
++                info.source_bus.as_str()
++            },
++        ),
++        "Reverb" => InsertEffect::reverb(info.p0, info.p1, info.p2),
++        _ => return None,
++    })
++}
++
++fn encode_insert(bus_id: u32, _index: usize, effect: &InsertEffect) -> String {
++    let info = insert_info(bus_id, _index, effect);
++    format!(
++        "{}|{}|{}|{}|{}|{}",
++        info.bus_id, info.kind, info.p0, info.p1, info.p2, info.source_bus
++    )
++}
++
++fn decode_insert(entry: &str) -> Option<BusInsertInfo> {
++    let mut parts = entry.split('|');
++    let bus_id = parts.next()?.parse::<u32>().ok()?;
++    let kind = parts.next()?.to_string();
++    let p0 = parts.next()?.parse::<f32>().ok()?;
++    let p1 = parts.next()?.parse::<f32>().ok()?;
++    let p2 = parts.next()?.parse::<f32>().ok()?;
++    let source_bus = parts.next().unwrap_or("").to_string();
++    Some(BusInsertInfo {
++        bus_id,
++        index: 0,
++        kind,
++        p0,
++        p1,
++        p2,
++        source_bus,
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn inserts_round_trip_through_the_preset_format() {
++        let effect = InsertEffect::sidechain_compressor(-20.0, 6.0, 4.0, "Music");
++        let encoded = encode_insert(3, 0, &effect);
++        let decoded = decode_insert(&encoded).expect("decodes");
++        assert_eq!(decoded.bus_id, 3);
++        assert_eq!(decoded.kind, "Sidechain");
++        assert_eq!(decoded.source_bus, "Music");
++        assert!((decoded.p0 + 20.0).abs() < 1e-6);
++    }
++
++    #[test]
++    fn unknown_insert_kind_is_rejected() {
++        assert!(info_to_insert(&BusInsertInfo {
++            bus_id: 0,
++            index: 0,
++            kind: "Chorus".into(),
++            p0: 0.0,
++            p1: 0.0,
++            p2: 0.0,
++            source_bus: String::new(),
++        })
++        .is_none());
++    }
++
++    #[test]
++    fn demo_tone_is_audible_and_click_free() {
++        let tone = synth_tone(440.0, 0.05, 48_000);
++        assert_eq!(tone.len(), 2_400);
++        assert!(tone.iter().any(|s| s.abs() > 0.1));
++        assert!(tone[0].abs() < 0.02, "starts at silence");
++        assert!(tone[tone.len() - 1].abs() < 0.02, "ends at silence");
++    }
++
++    #[test]
++    fn remap_skips_events_without_playable_assets() {
++        let mut event = Project::default().events.remove(0);
++        assert!(remap_slots(&event, &[None]).is_none());
++        event.tracks[0].instruments[0].asset_index = Some(0);
++        assert!(remap_slots(&event, &[Some(0)]).is_some());
++        event.tracks.clear();
++        assert!(remap_slots(&event, &[Some(0)]).is_none());
++    }
++
++    #[test]
++    fn register_and_replay_through_the_bridge() {
++        let Ok(mut bridge) = AudioBridge::new() else {
++            return;
++        };
++        let project = Project::default();
++        bridge.sync_project(&project);
++        bridge
++            .play_event("event:/sfx/beep")
++            .expect("event registered");
++        bridge.set_parameter("Intensity", 0.5);
++        bridge.pump(0.01);
++        let (peak, _) = bridge.master_levels();
++        assert!(peak >= 0.0);
++        bridge.stop();
++    }
+ }
+diff --git a/editor/src/project.rs b/editor/src/project.rs
+index ea029da..7810925 100644
+--- a/editor/src/project.rs
++++ b/editor/src/project.rs
+@@ -1,5 +1,11 @@
+ //! S3.1 / S5 / S7 — Project model: events, banks, assets, tracks, FX, AHDSR.
+ 
++use std::path::{Path, PathBuf};
++
++use ramod_runtime::{
++    Ahdsr, Attenuation, AutomationCurve, BankManifest, DesignedEvent, InstrumentDef,
++    InstrumentKind, TimelineTrack, TransitionMarker,
++};
+ use serde::{Deserialize, Serialize};
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -9,7 +15,10 @@ pub struct Project {
+     pub banks: Vec<BankEntry>,
+     pub assets: Vec<AssetEntry>,
+     #[serde(default)]
+-    pub fx_presets: Vec<FxPresetEntry>,
++    pub fx_presets: Vec<FxPreset>,
++    /// Last save / open location, if the project has been written to disk.
++    #[serde(default)]
++    pub path: Option<PathBuf>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -24,9 +33,11 @@ pub struct AssetEntry {
+     pub demo_freq_hz: Option<f32>,
+ }
+ 
++/// Named insert chain captured from the live mixer (S7.12).
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+-pub struct FxPresetEntry {
++pub struct FxPreset {
+     pub name: String,
++    /// Encoded inserts — see `AudioBridge::capture_fx_chain` for the format.
+     pub inserts: Vec<String>,
+ }
+ 
+@@ -87,6 +98,7 @@ impl ParameterDefEntry {
+         }
+     }
+ 
++    #[allow(dead_code)] // authoring API: discrete params are not exposed in the UI yet
+     pub fn discrete(name: impl Into<String>, default: i32, min_i: i32, max_i: i32) -> Self {
+         Self {
+             name: name.into(),
+@@ -128,7 +140,7 @@ pub enum InstrumentKindEntry {
+     },
+ }
+ 
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+ pub struct PlaylistEntry {
+     pub asset_index: Option<usize>,
+     #[serde(default = "default_weight")]
+@@ -193,6 +205,44 @@ fn default_event_len() -> f32 {
+     2.0
+ }
+ 
++impl EventEntry {
++    /// Authoring entry → runtime designed event (shared by playback and bank build).
++    pub fn to_designed(&self) -> DesignedEvent {
++        let mut designed = DesignedEvent::new(&self.path);
++        designed.is_3d = self.is_3d;
++        designed.attenuation = Attenuation {
++            min_distance: self.min_distance.max(0.01),
++            max_distance: self.max_distance.max(self.min_distance.max(0.01) + 0.01),
++        };
++        designed.priority = self.priority;
++        designed.length = self.length;
++        designed.output_bus = self.output_bus.clone();
++        designed.parameters = self.parameters.clone();
++        designed.automation = self
++            .automation
++            .iter()
++            .map(|a| {
++                let mut curve = AutomationCurve::new(&a.parameter);
++                for (time, value) in &a.keys {
++                    curve.add_key(*time, *value);
++                }
++                curve
++            })
++            .collect();
++        designed.markers = self
++            .markers
++            .iter()
++            .map(|m| TransitionMarker {
++                name: m.name.clone(),
++                time: m.time,
++                target_event: m.target_event.clone(),
++            })
++            .collect();
++        designed.tracks = self.tracks.iter().map(TrackEntry::to_designed).collect();
++        designed
++    }
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct TrackEntry {
+     pub name: String,
+@@ -203,6 +253,29 @@ pub struct TrackEntry {
+     pub solo: bool,
+ }
+ 
++impl TrackEntry {
++    pub fn new(name: impl Into<String>) -> Self {
++        Self {
++            name: name.into(),
++            instruments: Vec::new(),
++            mute: false,
++            solo: false,
++        }
++    }
++
++    pub fn to_designed(&self) -> TimelineTrack {
++        let mut track = TimelineTrack::new(&self.name);
++        track.mute = self.mute;
++        track.solo = self.solo;
++        track.instruments = self
++            .instruments
++            .iter()
++            .map(InstrumentEntry::to_designed)
++            .collect();
++        track
++    }
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct InstrumentEntry {
+     pub name: String,
+@@ -239,6 +312,39 @@ fn default_sustain() -> f32 {
+     1.0
+ }
+ 
++impl InstrumentEntry {
++    pub fn to_designed(&self) -> InstrumentDef {
++        let primary = self.asset_index.unwrap_or(0);
++        let mut def = InstrumentDef::single(&self.name, primary);
++        def.start_time = self.start_time;
++        def.length = self.length;
++        def.probability = self.probability;
++        def.looping = self.looping;
++        def.envelope = Ahdsr {
++            attack: self.attack,
++            hold: self.hold,
++            decay: self.decay,
++            sustain: self.sustain,
++            release: self.release,
++        };
++        match &self.kind {
++            InstrumentKindEntry::Single => {}
++            InstrumentKindEntry::Multi { playlist } => {
++                def.kind = InstrumentKind::Multi;
++                let slots: Vec<usize> = playlist.iter().filter_map(|p| p.asset_index).collect();
++                if !slots.is_empty() {
++                    def.buffer_slots = slots;
++                }
++            }
++            InstrumentKindEntry::Scatterer { count, .. } => {
++                def.kind = InstrumentKind::Scatter;
++                def.scatter_count = (*count as usize).max(1);
++            }
++        }
++        def
++    }
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct AutomationEntry {
+     pub parameter: String,
+@@ -246,6 +352,7 @@ pub struct AutomationEntry {
+ }
+ 
+ impl AutomationEntry {
++    #[allow(dead_code)] // authoring helper kept for automation presets
+     pub fn intensity_fade(start: f32, end: f32, t_end: f32) -> Self {
+         Self {
+             parameter: "Intensity".into(),
+@@ -354,11 +461,13 @@ impl Default for Project {
+                 demo_freq_hz: Some(440.0),
+             }],
+             fx_presets: Vec::new(),
++            path: None,
+         }
+     }
+ }
+ 
+ impl Project {
++    #[allow(dead_code)] // authoring API used by tests and future New-Event menu
+     pub fn add_event(&mut self, path: &str) {
+         self.events.push(EventEntry {
+             path: path.into(),
+@@ -381,17 +490,173 @@ impl Project {
+         });
+     }
+ 
+-    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
++    /// Append a track and return its index.
++    pub fn add_track(&mut self, event_index: usize, name: impl Into<String>) -> Option<usize> {
++        let event = self.events.get_mut(event_index)?;
++        event.tracks.push(TrackEntry::new(name));
++        Some(event.tracks.len() - 1)
++    }
++
++    /// Append an instrument to `track_index` and return `(track, instrument)`.
++    pub fn add_instrument(
++        &mut self,
++        event_index: usize,
++        track_index: usize,
++        name: impl Into<String>,
++        asset_index: Option<usize>,
++    ) -> Option<(usize, usize)> {
++        let event = self.events.get_mut(event_index)?;
++        if event.tracks.is_empty() {
++            event.tracks.push(TrackEntry::new("Audio 1"));
++        }
++        let track_index = track_index.min(event.tracks.len() - 1);
++        let track = event.tracks.get_mut(track_index)?;
++        track.instruments.push(InstrumentEntry {
++            name: name.into(),
++            asset_index,
++            start_time: 0.0,
++            length: 0.5,
++            probability: 1.0,
++            looping: false,
++            attack: 0.0,
++            hold: 0.0,
++            decay: 0.0,
++            sustain: 1.0,
++            release: 0.05,
++            kind: InstrumentKindEntry::Single,
++        });
++        Some((track_index, track.instruments.len() - 1))
++    }
++
++    /// Register a file as an asset and return its index.
++    pub fn add_asset_file(&mut self, path: &Path) -> usize {
++        let name = path
++            .file_stem()
++            .and_then(|s| s.to_str())
++            .unwrap_or("asset")
++            .to_string();
++        if let Some(idx) = self
++            .assets
++            .iter()
++            .position(|a| a.source_path.as_deref() == path.to_str())
++        {
++            return idx;
++        }
++        self.assets.push(AssetEntry {
++            name,
++            source_path: Some(path.to_string_lossy().into_owned()),
++            demo_freq_hz: None,
++        });
++        self.assets.len() - 1
++    }
++
++    pub fn save(&self, path: &Path) -> Result<(), String> {
+         let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
++        if let Some(parent) = path.parent() {
++            if !parent.as_os_str().is_empty() {
++                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
++            }
++        }
+         std::fs::write(path, s).map_err(|e| e.to_string())
+     }
+ 
+-    pub fn load(path: &std::path::Path) -> Result<Self, String> {
++    #[allow(dead_code)] // authoring API: the Open menu item is not wired yet
++    pub fn load(path: &Path) -> Result<Self, String> {
+         let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+-        serde_json::from_str(&s).map_err(|e| e.to_string())
++        let mut project: Self = serde_json::from_str(&s).map_err(|e| e.to_string())?;
++        project.path = Some(path.to_path_buf());
++        Ok(project)
++    }
++
++    /// Build a bank manifest for every event assigned to `bank_name`.
++    ///
++    /// Writes `<out_path>/<bank>.bank.json` and returns the manifest path.
++    pub fn export_bank_build(&self, bank_name: &str, out_path: &Path) -> Result<PathBuf, String> {
++        let designed: Vec<DesignedEvent> = self
++            .events
++            .iter()
++            .filter(|e| e.bank.eq_ignore_ascii_case(bank_name))
++            .map(EventEntry::to_designed)
++            .collect();
++        if designed.is_empty() {
++            return Err(format!("bank '{bank_name}' has no events"));
++        }
++        let manifest = BankManifest::from_events(bank_name, &designed);
++        std::fs::create_dir_all(out_path).map_err(|e| e.to_string())?;
++        let safe: String = bank_name
++            .chars()
++            .map(|c| if c.is_alphanumeric() { c } else { '_' })
++            .collect();
++        let path = out_path.join(format!("{safe}.bank.json"));
++        std::fs::write(&path, manifest.to_json()).map_err(|e| e.to_string())?;
++        Ok(path)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn default_project_round_trips_through_json() {
++        let project = Project::default();
++        let json = serde_json::to_string(&project).expect("serialize");
++        let back: Project = serde_json::from_str(&json).expect("deserialize");
++        assert_eq!(back.events.len(), project.events.len());
++        assert!(back.path.is_none());
++    }
++
++    #[test]
++    fn add_track_and_instrument_target_the_requested_event() {
++        let mut project = Project::default();
++        let track = project.add_track(1, "Audio 2").expect("event 1 exists");
++        let (t, i) = project
++            .add_instrument(1, track, "clip", Some(0))
++            .expect("instrument added");
++        assert_eq!((t, i), (track, 0));
++        assert_eq!(project.events[1].tracks.len(), 2);
++        assert_eq!(project.events[1].tracks[track].instruments.len(), 1);
++    }
++
++    #[test]
++    fn add_asset_file_is_idempotent() {
++        let mut project = Project::default();
++        let p = Path::new("assets/kick.wav");
++        let first = project.add_asset_file(p);
++        let second = project.add_asset_file(p);
++        assert_eq!(first, second);
++        assert_eq!(project.assets[first].name, "kick");
++    }
++
++    #[test]
++    fn designed_event_carries_timing_and_3d_fields() {
++        let mut event = Project::default().events.remove(0);
++        event.is_3d = true;
++        event.min_distance = 2.0;
++        event.max_distance = 20.0;
++        let designed = event.to_designed();
++        assert!(designed.is_3d);
++        assert_eq!(designed.attenuation.min_distance, 2.0);
++        assert_eq!(designed.tracks.len(), 1);
++        assert_eq!(designed.tracks[0].instruments[0].buffer_slots, vec![0]);
++    }
++
++    #[test]
++    fn bank_build_writes_a_manifest() {
++        let project = Project::default();
++        let out = std::env::temp_dir().join("ramod_bank_build_test");
++        let path = project
++            .export_bank_build("Master", &out)
++            .expect("build succeeds");
++        let text = std::fs::read_to_string(&path).expect("manifest written");
++        assert!(text.contains("event:/sfx/beep"));
++        let _ = std::fs::remove_dir_all(&out);
+     }
+ 
+-    pub fn export_bank_build(&self, _bank_name: &str, _out_path: &std::path::Path) -> Result<usize, String> {
+-        Ok(0)
++    #[test]
++    fn empty_bank_is_reported_not_silently_written() {
++        let project = Project::default();
++        let out = std::env::temp_dir().join("ramod_bank_build_empty");
++        assert!(project.export_bank_build("Missing", &out).is_err());
+     }
+ }
+diff --git a/runtime/src/runtime_core_b.rs b/runtime/src/runtime_core_b.rs
+index bf76961..de51d04 100644
+--- a/runtime/src/runtime_core_b.rs
++++ b/runtime/src/runtime_core_b.rs
+@@ -281,6 +281,21 @@ impl Runtime {
+     pub fn clear_snapshot(&mut self) {
+         self.snapshots.clear();
+     }
++
++    /// Capture the current bus levels as the base for snapshot interpolation.
++    pub fn capture_snapshot_base(&mut self) {
++        self.snapshots.capture_base(&self.mixer);
++    }
++
++    /// Store the current bus levels as a named snapshot, replacing any existing one.
++    pub fn capture_named_snapshot(&mut self, name: impl Into<String>) {
++        self.snapshots.capture_named(name, &self.mixer);
++    }
++
++    /// Names of the snapshots currently stored in the mixer.
++    pub fn snapshot_names(&self) -> Vec<String> {
++        self.snapshots.names()
++    }
+ }
+ 
+ #[cfg(test)]
 -- 
 2.43.0
 

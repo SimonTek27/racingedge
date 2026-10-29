@@ -167,50 +167,88 @@ APIs plus a Redo button.
 | `rustfmt --check editor/src/waveform_panel.rs` | clean |
 | `cargo clippy -p ramod_waveform --lib` | exit 0 (3 pre-existing warnings in unrelated files) |
 
-### Found while verifying: the editor crate does not build
+### Editor crate: was broken (39 errors), now rebuilt
 
-`cargo check -p ramod_editor` reports **34 errors that predate this pass**, spread over
-`audio_bridge.rs` (8), `main.rs` (29 minus my file), `event_editor.rs` (4), `profiler_panel.rs` (4),
-`project.rs` (1). `waveform_panel.rs` itself is error- and warning-free.
+`cargo check -p ramod_editor` failed with **39 errors that predate this pass**, spread over
+`audio_bridge.rs`, `main.rs`, `event_editor.rs`, `profiler_panel.rs` and `project.rs`.
+`waveform_panel.rs` itself was error- and warning-free.
 
-The shape is the same as the lost `runtime_core_b`: `audio_bridge.rs` is missing ~25 methods the UI
-already calls (`play_pcm`, `pump`, `set_parameter`, `master_levels`, `profiler_snapshot`,
-`capture_fx_chain`, `apply_fx_chain`, the five `add_bus_*` insert helpers, the snapshot helpers),
-and its exported types (`ProfilerSnapshot`, `BusInsertInfo`, `FxPreset`) are gone; `Project` lost
-`path`, `add_asset_file`, `add_track`, `add_instrument`; `TrackEntry::new` is missing and
-`PlaylistEntry` has no `PartialEq`. So the zoom work is type-checked but **not runnable**, which is
-why must-have 15 stays `partial` in the matrix rather than being promoted on unit tests alone.
+The shape was the same as the lost `runtime_core_b`: `audio_bridge.rs` was a 115-line stub whose
+body had been truncated, so ~30 methods the UI already calls were gone (`play_pcm`, `pump`,
+`set_parameter`, `master_levels`, `profiler_snapshot`, `profiler_ndjson`, the snapshot and 3D
+helpers, the five `add_bus_*` insert helpers, `capture_fx_chain`/`apply_fx_chain`), along with the
+types it exports (`ProfilerSnapshot`, `BusInsertInfo`). `Project` had lost `path`, `add_asset_file`,
+`add_track`, `add_instrument`, `FxPreset` and a bank build whose `Result` still carried a count
+while the UI called `.display()` on it; `TrackEntry::new` was missing and `PlaylistEntry` had no
+`PartialEq`. `recovery/ab.z0` cannot restore any of it — it is truncated base64 (2481 characters,
+not a multiple of 4) and decodes to nothing.
 
-## Publishing the repairs (and why it is not pushed yet)
+Both modules were rebuilt against the real `ramod_runtime` API rather than guessed at:
+
+| Module | What is there now |
+| --- | --- |
+| `editor/src/audio_bridge.rs` | drives `Runtime`/`Mixer` directly: project sync with a per-event signature so only edited events re-register, cached asset PCM (file decode or a click-free demo tone), event play with parameters re-applied, PCM preview voice, frame-clock rendering via `pump`, bus meters/inserts/snapshots, 3D listener and emitter, FX preset capture/apply |
+| `editor/src/project.rs` | `path`, `FxPreset`, `TrackEntry::new`, `add_track`, `add_instrument`, `add_asset_file`, `EventEntry::to_designed`, and a bank build that writes a real `BankManifest` |
+| `runtime/src/runtime_core_b.rs` | `capture_snapshot_base`, `capture_named_snapshot`, `snapshot_names` — the snapshot UI needs them and the engine never exposed `SnapshotPlayer` |
+
+The commit is `e2cda26` on top of `18436a2`, touching only those three files. A `cargo fmt --all`
+run was deliberately reverted for the other 24 files it reformatted: this repair should not carry a
+repo-wide formatting diff, so `cargo fmt --all -- --check` still fails workspace-wide exactly as it
+did before.
+
+### Verified
+
+| Check | Result |
+| --- | --- |
+| `cargo check -p ramod_editor` | 39 errors → **0** |
+| `cargo test -p ramod_editor` | **11 passed** (bridge replay is audible through the mixer, FX chain round-trips, bank build writes a manifest) |
+| `cargo test -p ramod` | 47 passed |
+| `cargo test -p ramod_waveform` | 27 passed |
+| `cargo test -p ramod_runtime --lib` | 6 passed (with the cpal backend linked) |
+| `cargo test -p ramod_runtime --lib --no-default-features` | 6 passed (null backend) |
+| `cargo fmt --all -- --check` | clean for the three edited files |
+
+Not run here: `bevy_ramod` was not rebuilt (the runtime change is purely additive, so it cannot
+break the Bevy plugin), and the egui editor window was never launched — this VM has no display.
+
+Environment note, not a repo change: the image has no ALSA headers or `libasound`, so `cpal` could
+not link. `alsa-lib` 1.2.11 was built under `$HOME/.local` and pointed at with `PKG_CONFIG_PATH`
+plus `LD_LIBRARY_PATH` to link and run the tests. That workaround lives outside the repository.
+
+## Publishing the repairs (and why they are not pushed yet)
 
 The repairs were applied to a **clean checkout of RaMOD `main`**, not just the working clone:
 
 ```
-git worktree at f941b56  ->  git am replica/ramod-repair.patch  ->  18436a2
+git worktree at f941b56  ->  git am replica/ramod-repair.patch  ->  074294f + 6425600
 ```
 
-`replica/ramod-repair.patch` is a `git format-patch` export, so `git am` lands it as one signed-off
-commit with its message intact instead of a bare diff. It was re-applied to a second pristine
-worktree to confirm the round trip.
+`replica/ramod-repair.patch` is a `git format-patch` export over both commits, so `git am` lands
+them with their messages intact instead of as a bare diff. It was re-applied to a second pristine
+worktree to confirm the round trip; the resulting hashes differ only because the base worktree is
+new, and the trees match.
 
 | Check in the clean checkout (`f941b56` + patch) | Result |
 | --- | --- |
-| `git am replica/ramod-repair.patch` | clean, commit `18436a2` |
+| `git apply --check replica/ramod-repair.patch` | clean |
+| `git am replica/ramod-repair.patch` | clean, both commits reproduced |
 | `cargo test -p ramod --lib` | 47 passed |
 | `cargo test -p ramod_waveform --lib` | 27 passed |
 | `cargo test -p ramod_runtime --lib --no-default-features` | 6 passed (null backend) |
 
+Patch fingerprint: 6015 lines, sha256 `c8b536b34f65b7fb60cecb23…`.
+
 **The push is blocked by credentials, not by the code.** This workspace's GitHub credential is
 scoped to the connected repository (`racingedge`). `git push` to `SimonTek27/RaMOD` from the clone
-fails with `fatal: could not read Username for 'https://github.com'`, and asking for a token to
-paste in is not something this workflow should do.
+fails with `fatal: could not read Username for 'https://github.com'` (exit 128, re-checked after
+both commits), and asking for a token to paste in is not something this workflow should do.
 
-To land it, either connect `SimonTek27/RaMOD` as the repository for a chat and ask for the push
-again, or from a local RaMOD clone that is already on `main` at `f941b56`:
+To land it, either open a chat on `SimonTek27/RaMOD` and give it this patch, or from a local RaMOD
+clone whose `main` is at `f941b56`:
 
 ```
 git am /path/to/ramod-repair.patch
-git push origin HEAD:refs/heads/fix/restore-build-and-effects
+git push origin HEAD:refs/heads/master
 ```
 
 `replica/ramod-fixes.patch` remains as the plain-diff form (verified earlier with `git apply`).
