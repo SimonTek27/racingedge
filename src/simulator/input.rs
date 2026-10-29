@@ -116,7 +116,7 @@ impl JoystickMapping {
 
 /// Mappatura della tastiera (port di `KeyboardMapping`), con le frecce come
 /// alternative fisse.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyboardMapping {
     /// Acceleratore.
     pub throttle: i32,

@@ -72,7 +72,9 @@ Two migration gotchas worth remembering:
 | D8 input + FFB | `src/simulator/input.rs` (joystick/keyboard mapping, `key_name`/`key_from_name`, flat-ini persistence, `InputManager` with dead-zone/gamma curves, edge-triggered shifts, injection and a `ControllerBackend` trait for HW polling) + `src/simulator/ffb.rs` (`FfbBridge` aligning-moment→torque via `MagicFormulaTire`, `FfbOutput` soft-FFB with optional `FfbActuator`) | 14 + 6 unit tests |
 | D6 setup | `src/simulator/setup.rs` — `SetupData`/`SetupParams`, tabbed `SetupGarage` (typed `GarageRow`s with ranges/stepping, key handling, fade) and per-car/track ini persistence (`setup_path`/`save_setup`/`load_setup`). The Bevy garage screen itself lands with the app UI | 14 unit tests |
 | C1 audio 3D | `src/simulator/audio3d.rs` — `doppler_factor`, `distance_gain`, `bearing_pan`, `OtherCarVoice` and `CarEventVolumes` (`[AUDIO_VOLUME]`/`[AUDIO_PITCH]` parsing + category mapping) | 13 unit tests |
+| C1/C3 host mix | `src/simulator/audio_host.rs` — `CarMixFrame`/`CarMix`: the car mix as plain data per voice (id, gain, rate, audible), so `bevy_audio` applies it and a host mixer (Renzora) reads the same numbers without re-deriving the mix | 10 unit tests + 1 doc test |
 | C2 track audio | `src/simulator/track_audio.rs` — `TrackAudioManager` (event config parse from `audio_config.ini`, weather-driven triggers, per-camera gain, attenuation models) + `WeatherState` subset | 11 unit tests |
+| D11 menus | `src/simulator/menus.rs` — `GameMenu` model (pause / settings / key-rebind screens, rows, cursor, rebound keys with swap-on-conflict, INI persistence of settings and bindings) + `src/plugins/menu.rs` (Bevy overlay, `Esc` pause, `SimulationPause` gating the drive loop, `DriveBindings` fed from the shared `KeyboardMapping`) + `src/plugins/keymap.rs` (`KeyCode` ⇄ virtual-key bridge) | 16 + 2 + 5 unit tests + 1 doc test |
 | D10 HUD | `src/simulator/hud.rs` — `RaceTelemetryHud` (Off/Compact/Race/Engineer modes, per-mode line layout, speed/throttle/brake/rpm history, delta), `DashboardOverlay`, `TelemetryOverlay` plus a Bevy `HudPlugin` (mode cycle on F2, telemetry→sample sync, UI text nodes) | 15 unit tests |
 | A1 KN5 | `src/formats/kn5.rs` — KN5 reader (magic `sc6969`, v4/5/6): textures, materials, node hierarchy (Base/Mesh/SkinnedMesh), world matrices, bounds-checked cursor, `to_bevy_mesh` conversion | 17 unit tests |
 | A3 AI spline | `src/formats/ai_spline.rs` — `read_spline`/`write_spline` (`0x00414900` v1), text fallback, cumulative distance + closed-loop detection | 11 unit tests |
@@ -92,11 +94,13 @@ Two migration gotchas worth remembering:
 | H2 C API | `src/c_api.rs` (`ReEngine` over `VehicleConfig`/`VehicleState` + `SessionFlow`: create/destroy/reset, timestep, input, step, state, version, session configure/start/phase/lap/time/remaining) + hand-written `include/racingedge.h` and `[lib] crate-type = ["rlib", "cdylib"]` | 9 unit tests + 1 doc test |
 | E4 telemetry out | `src/net/telemetry.rs` (UDP `:20777`, TCP `:20778`, `TelemetryPlugin`) | 9 unit tests + 1 doc test |
 | I1 CI | `.github/workflows/ci.yml` (Windows, `fmt` + `clippy -D warnings` + `test`) | — |
+| I3 Renzora host build | `Cargo.toml` `game-audio = ["bevy/audio"]` + `#[cfg(feature = "game-audio")]` on `audio_playback`, `editor::audio::{plugin, browser}` and the menu volume; verified compiling against a Bevy with no `bevy_audio`, and linted in CI by the Bevy-without-`audio` leg | — |
+| I4 Renzora input seam | `plugins::physics::DriveControls` (throttle/brake/steer as plain data, clamped into `VehicleState`) + `KeyboardDriveInput(false)` to take the built-in keyboard sampler out — a host input plugin or the ported `InputManager` drives the same physics | 6 unit tests (3 new) |
 | — | `src/editor/ini.rs` — ordered INI reader shared by A2/A9 | 6 unit tests |
 | **Bevy 0.20** | `Cargo.toml`/`Cargo.lock`, `src/main.rs`, `editor/audio/*`, `plugins/physics.rs`, all of `simulator/*` (§0) | whole tree compiles, lints clean |
 
 Green baseline: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test --all-targets` (517 unit tests) and `cargo test --doc` (17 doc tests)
+`cargo test --all-targets` (550 unit tests) and `cargo test --doc` (21 doc tests)
 all pass.
 
 ## App layer (game binary)
@@ -117,8 +121,11 @@ encoded to 16-bit WAV in memory, so no audio files are shipped for the voice
 layer. One-shots (backfire, gear shift, limiter) and wind are still model-only
 in `CarSound::playback`.
 
-Still deferred to the app: `FeatureHub` session flow and menus, the garage/setup
-screen, replay playback and the `MultiCarManager`/AI field.
+Still deferred to the app: the `FeatureHub` session flow, the garage/setup
+screen, replay playback and the `MultiCarManager`/AI field. The menus (D11) are
+in the app now: `Esc` pauses the drive loop through `SimulationPause`, and the
+settings/key-rebind screens edit the same `KeyboardMapping` the drive loop
+reads.
 
 ---
 
@@ -219,7 +226,7 @@ screen, replay playback and the `MultiCarManager`/AI field.
 | D8 ✅ | Input & FFB: gamepad, DirectInput wheels, force feedback output (HW polling/actuators behind traits, attached by the app) | `InputManager.*`, `devices/*`, `FfbOutput.h` | M/L |
 | D9 ✅ | `camera.rs` — cockpit / cinematic / replay cameras | `CameraController.*` | S |
 | D10 ✅ | HUD + telemetry overlay in Bevy UI | `DashboardOverlay.*`, `TelemetryOverlay.*`, `RaceTelemetryHud.h` | M |
-| D11 | Menus: pause, settings, key rebind, device settings | `GameMenuOverlay.*`, `KeyRebindOverlay.h` | M |
+| D11 ✅ | `menus.rs` — pause, settings (volume, HUD mode, camera, FFB gain, steering curve) and key rebind, persisted to `user/settings.ini` and `user/keyboard.ini`; the Bevy overlay and the pause gate live in `plugins/menu.rs` | `GameMenuOverlay.*`, `KeyRebindOverlay.h`, `DeviceSettings.h` | M |
 | D12 | `content_library.rs` — scan installed content/mods | `ContentLibrary.h`, `tools/ksmmm` | M |
 | D13 ✅ | `user_stats.rs` — career stats: wins, poles, podiums, best lap (the `DriverProfile` helpers land with the D11 menus) | `UserStats.h` | S |
 
@@ -271,6 +278,8 @@ screen, replay playback and the `MultiCarManager`/AI field.
 | --- | --- | --- | --- |
 | I1 ✅ | GitHub Actions CI: `cargo fmt --check`, `clippy -D warnings`, `cargo test` | README build badge | S |
 | I2 | Golden/determinism tests + byte-exact format round trips | `test_determinism`, `PhysicsGolden.h` | S/M |
+| I3 ✅ | Renzora host build: `game-audio` owns every `bevy_audio` reference, and CI lints the shape Renzora builds (Bevy without `bevy_audio`) | — | S |
+| I4 ✅ | Renzora input seam: `DriveControls` resource + `KeyboardDriveInput` opt-out, so the host's input plugin or a wheel writes the same controls the keyboard does | — | S |
 
 ---
 
@@ -286,7 +295,7 @@ B6 ✅, D9 ✅, D5 ✅, D8 ✅, D6 ✅, C1 ✅, C2 ✅, D10 ✅.
 E2 ✅, E3 ✅, E5 ✅, H1 ✅, H2 ✅, H3 ✅.
 
 **Phase 4 — editor and extended modding.** A12, A13, C3–C7, F1–F5, G1–G6,
-E6–E8.
+E6–E8. D11 (menus) landed with Phase 2's runtime work.
 
 ## High-value / low-cost starting points
 

@@ -44,3 +44,30 @@ jobs:
 
       - name: Doc tests
         run: cargo test --locked --doc
+
+      # The Renzora host takes this crate with `--no-default-features` and a Bevy
+      # that has no `bevy_audio` (its mixer is `renzora_audio`), so every
+      # `bevy_audio` use has to sit behind `game-audio`. Bevy 0.20's defaults are
+      # exactly `2d`, `3d`, `ui`, `audio`, so that shape is reproducible here:
+      # drop `audio` from Bevy, keep our features off, and compile. An ungated
+      # `bevy::audio` reference then fails the build instead of failing in a
+      # Renzora checkout.
+      - name: Renzora-shaped build (Bevy without bevy_audio)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Restore from a copy, not from git: `git checkout --` would also throw
+          # away unrelated uncommitted manifest edits when the same script is run
+          # locally.
+          backup="$(mktemp -d)"
+          cp Cargo.toml Cargo.lock "$backup/"
+          trap 'cp "$backup/Cargo.toml" "$backup/Cargo.lock" .' EXIT
+          sed -i 's|^bevy = "0.20"$|bevy = { version = "0.20", default-features = false, features = ["2d", "3d", "ui"] }|' Cargo.toml
+          grep -q 'default-features = false' Cargo.toml
+          # No `--locked`: dropping Bevy's audio features legitimately prunes the
+          # lock (bevy_audio, vorbis, cpal, rodio). The trap puts it back.
+          cargo clippy --all-targets --no-default-features -- -D warnings
+          if cargo tree --no-default-features | grep -q bevy_audio; then
+            echo "::error::bevy_audio is in the graph of a build without game-audio"
+            exit 1
+          fi

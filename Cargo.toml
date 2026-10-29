@@ -15,12 +15,18 @@ exclude = ["renzora/"]
 
 [features]
 default = ["game-audio"]
-# Audible car audio through `bevy_audio` (`simulator::audio_playback`). Bevy's
-# own `audio` feature is part of its default set, so this gates OUR playback
-# layer only: a host that brings its own mixer (Renzora ships `renzora_audio`
-# and never enables `bevy_audio`) builds with `--no-default-features` and keeps
-# the mix models without the voices.
-game-audio = []
+# Everything in this crate that talks to `bevy_audio`: the car voices
+# (`simulator::audio_playback`), the FSB bank loader and its in-game browser
+# (`editor::audio::{plugin, browser}`) and the menu's master-volume control.
+#
+# Bevy's own `audio` feature is part of its default set, so this is a no-op for
+# the game binary; it exists for hosts that bring their own mixer. Renzora ships
+# `renzora_audio` and builds Bevy with `default-features = false`, so the wrapper
+# takes this crate with `default-features = false`: no `bevy_audio` code is
+# compiled and the mix models (plain data) stay available. Keeping the
+# dependency edge spelled out here — rather than relying on Bevy's defaults — is
+# what makes that configuration real instead of accidental.
+game-audio = ["bevy/audio"]
 
 [lib]
 # `rlib` for the game binary and CLI, `cdylib` so C hosts can link the `c_api`
@@ -31,6 +37,9 @@ crate-type = ["rlib", "cdylib"]
 # Bevy is always tracked at the latest release: racingedge adapts to Bevy, never
 # the other way round. See AGENTS.md, "Rule 1".
 bevy = "0.20"
+# — no `default-features = false` here: the game binary needs Bevy's full set.
+# Feature selection is the host's job; `game-audio` above only adds `bevy/audio`
+# for hosts that turned Bevy's defaults off (see `docs/RENZORA_MIGRATION.md`).
 ramod = { git = "https://github.com/SimonTek27/RaMOD" }
 # Mod SDK scripting engine (H1). Pure Rust, no C toolchain needed on CI;
 # `sync` keeps the host Send + Sync so it can live in a Bevy resource.

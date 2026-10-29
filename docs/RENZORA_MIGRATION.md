@@ -36,10 +36,45 @@ Two consequences are load-bearing:
 * **One plugin for the whole game layer.** `racingedge::plugins::RacingEdgeGamePlugin`
   composes `PhysicsPlugin` + `GamePlugin`. A host adds that single plugin; the
   binary already does, and the Renzora wrapper does too.
-* **The audio split.** `game-audio` is a default feature; with
-  `--no-default-features` the crate builds without `simulator::audio_playback`
-  and `CarSoundPlugin` installs no `bevy_audio` voices, while `CarSound` /
-  `CommonSound` (the mix models) stay available for a host mixer.
+* **The audio split.** `game-audio` is a default feature and it is the *only*
+  place this crate mentions `bevy_audio`. With `--no-default-features` the crate
+  builds without `simulator::audio_playback`, `CarSoundPlugin` installs no
+  voices, the FSB bank loader/browser (`editor::audio::{plugin, browser}`) and
+  the menu's `GlobalVolume` control are compiled out, and `src/main.rs` does not
+  add `AudioPlugin` — while `CarSound` / `CommonSound` (the mix models), every
+  FSB parser/writer and the menu model (including `master_volume`) stay
+  available for a host mixer.
+
+  The feature also declares the dependency edge (`game-audio = ["bevy/audio"]`).
+  That matters because our `bevy = "0.20"` keeps Bevy's default features: for
+  the plain game binary the edge is a no-op, but in a Renzora-shaped build —
+  `default-features = false` on this crate, Bevy without `bevy_audio` — the
+  crate asks for `bevy/audio` only when `game-audio` is on, so the two stay in
+  step instead of depending on Bevy's defaults by accident.
+* **Input is a seam, not a keyboard.** `plugins::DriveControls` — throttle, brake and steer as
+  plain data — is the only thing the drive loop reads. The built-in keyboard sampler is merely its
+  default writer, and `KeyboardDriveInput(false)` takes that sampler out of the schedule, so a
+  host's input plugin writes the three values and no held key can overwrite them. Values are
+  clamped on the way into `VehicleState`, and `DriveControls::from_input_manager` converts the
+  ported wheel/gamepad `InputManager` (whose mapping, dead zone and gamma are already applied).
+  The seam is tested without an `App`: host-written controls reach the car, a held key does not,
+  and out-of-range values cannot.
+* **The car mix is host-agnostic.** `simulator::audio_host` turns the mix models
+  into a `CarMixFrame` of plain numbers per voice and publishes it in the
+  `CarMix` resource, with no audio API involved; `bevy_audio` is one consumer,
+  and a host mixer is another. It is always compiled, so the Renzora build keeps
+  the full mix decision (camera split, virtual voices, surface levels) even
+  though it has no `bevy_audio`.
+* **The audio-free build is verified, not assumed.** Bevy 0.20's defaults are
+  exactly `2d`, `3d`, `ui`, `audio`, so the Renzora shape is reproducible
+  locally: with `bevy = { version = "0.20", default-features = false, features =
+  ["2d", "3d", "ui"] }` and `cargo check --all-targets --no-default-features`,
+  this crate (library, `racingedge` and `rea_bridge`) compiles, and `cargo tree`
+  shows **no `bevy_audio` and no `vorbis`** in the graph. CI reproduces exactly
+  that on every push: a step rewrites the manifest to drop Bevy's `audio`
+  feature, lints the crate with `--no-default-features`, asserts `bevy_audio` is
+  absent from `cargo tree`, and restores the manifest — so a stray
+  `bevy_audio` reference fails in CI instead of in a Renzora checkout.
 * **The Renzora wrapper crate** in [`renzora/racingedge_plugin/`](../renzora/racingedge_plugin):
   `RacingEdgePlugin` + `renzora::add!(RacingEdgePlugin, Runtime);`. It is
   deliberately outside this package (`exclude = ["renzora/"]`, own `[workspace]`)
@@ -64,15 +99,32 @@ Two consequences are load-bearing:
    For local iteration switch the `racingedge` dependency from `git` to `path`.
 3. **Bridge the audio.** Re-express `simulator::audio_playback` on Renzora's
    `AudioLink`/`renzora_audio` (sound ids, voices, mixer) instead of
-   `bevy_audio`. Until this exists the Renzora build is silent: it keeps
-   `CarSound`/`CommonSound` mix weights and no voices.
+   `bevy_audio`. The seam is in place, so this is an adapter rather than a
+   refactor:
+
+   * `simulator::audio_host` computes the whole mix once as a `CarMixFrame` —
+     `(voice id, gain, playback rate, audible)` per engine layer and tyre loop —
+     and publishes it in the `CarMix` resource. It is plain data with no audio
+     API, tested without a device, and it is what the `bevy_audio` path applies.
+   * A Renzora plugin reads `CarMix` and drives `renzora_audio` voices from those
+     numbers; `engine_voice_audible` (interior in cockpit, exterior otherwise)
+     and the virtual-voice rule come with the frame.
+   * `master_volume` lives in `MenuState` (the menu writes it to Bevy's
+     `GlobalVolume` only under `game-audio`), so the host mixer can read it.
+
+   Remaining work is the voice adapter itself: create one `renzora_audio` voice
+   per `VoiceId` from the FSB/`.rebank` samples and apply the frame each tick.
+   Until it lands the Renzora build is silent but complete.
 4. **Decide the scene story.** The game currently spawns its own car, ground
    plane, light and camera in code. Under Renzora those belong in a `.bsn` scene
    the editor owns, leaving the plugin to attach `VehicleState` and the drive
    systems to a scene-provided entity. That is a design decision, not a port,
    because it changes where the car's transform comes from.
-5. **Input.** Our driving input reads `ButtonInput<KeyCode>` directly; Renzora
-   has its own input plugin and settings/rebinding. Reuse theirs or keep ours.
+5. **Choose the binding UI.** Input no longer couples the loop to Bevy's keyboard: a host's
+   input plugin drives the car today through `DriveControls`. What remains is a product choice,
+   not plumbing. Renzora ships its own settings/rebinding screen; ours (`simulator::menus` +
+   `plugins::menu`) edits `DriveBindings`/`KeyboardMapping` and persists to `user/keyboard.ini`.
+   Point the menu at Renzora's actions or keep ours — the physics is identical either way.
 6. **Keep the Bevy binary working.** `src/main.rs` stays the pure-Bevy runner so
    CI (`windows-latest`), the CLI tests and the C API keep their baseline; the
    Renzora path is additive.

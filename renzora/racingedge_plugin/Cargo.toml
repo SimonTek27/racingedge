@@ -23,8 +23,11 @@ crate-type = ["rlib"]
 bevy = { workspace = true }
 renzora = { path = "../renzora" }
 
-# The game itself. `default-features = false` drops `game-audio`, i.e. the
-# `bevy_audio` playback layer this engine cannot run; the mix models stay.
+# The game itself. `default-features = false` drops `game-audio`, the one
+# feature that owns every `bevy_audio` reference: the car voices, the FSB bank
+# loader/browser and the menu's `GlobalVolume` control. The mix models, every
+# FSB parser/writer and the menu settings stay, and `renzora_audio` supplies
+# the voices and reads `master_volume` from the menu resource.
 [dependencies.racingedge]
 git = "https://github.com/SimonTek27/racingedge"
 default-features = false
