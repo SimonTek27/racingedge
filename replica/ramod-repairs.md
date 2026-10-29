@@ -220,7 +220,7 @@ plus `LD_LIBRARY_PATH` to link and run the tests. That workaround lives outside 
 The repairs were applied to a **clean checkout of RaMOD `main`**, not just the working clone:
 
 ```
-git worktree at f941b56  ->  git am replica/ramod-repair.patch  ->  074294f + 6425600
+git worktree at f941b56  ->  git am replica/ramod-repair.patch  ->  3 commits
 ```
 
 `replica/ramod-repair.patch` is a `git format-patch` export over both commits, so `git am` lands
@@ -236,7 +236,7 @@ new, and the trees match.
 | `cargo test -p ramod_waveform --lib` | 27 passed |
 | `cargo test -p ramod_runtime --lib --no-default-features` | 6 passed (null backend) |
 
-Patch fingerprint: 6015 lines, sha256 `c8b536b34f65b7fb60cecb23…`.
+Patch fingerprint: 6701 lines, sha256 `d55beba637dedb8d391da941…` (three commits).
 
 **The push is blocked by credentials, not by the code.** This workspace's GitHub credential is
 scoped to the connected repository (`racingedge`). `git push` to `SimonTek27/RaMOD` from the clone
@@ -252,3 +252,27 @@ git push origin HEAD:refs/heads/master
 ```
 
 `replica/ramod-fixes.patch` remains as the plain-diff form (verified earlier with `git apply`).
+
+## Live update: editor → game
+
+The editor's Live Update client (`editor/src/live_client.rs`) existed but nothing ever
+constructed it: `main.rs` carried `live_update`/`live_client` fields it never read, and the
+client created a `BufReader` and immediately dropped it, so a game disconnecting was invisible.
+
+It is now wired end to end:
+
+| Piece | Behaviour |
+| --- | --- |
+| Live menu | connects / disconnects to `127.0.0.1:17420`, or reports why it failed |
+| Status bar | `● live` / `○ live` dot plus the last ack or the drop reason |
+| Intensity slider | pushes `set_param` for the selected event as it moves |
+| Bus volume / mute / solo | pushes `set_bus` as one line with any subset of the three fields |
+| Socket polling | throttled to 100 ms; the read has a 1 ms timeout, so per-frame polling would spend frame budget for nothing |
+
+The server had two handshake bugs that made this unparseable: the `welcome` and `pong`
+replies were missing their opening brace (`"cmd":"welcome",…}`), so no JSON client could read
+them. Both are fixed and covered by tests (`runtime/src/live_update.rs`).
+
+The editor crate now enables the runtime's `live-update` feature so its tests drive the real
+`LiveUpdateServer` instead of a mock. Verified: **16 editor tests** (5 new) and **8 runtime
+tests** pass, including "a parameter edit reaches the playing game" and "bus state applies".

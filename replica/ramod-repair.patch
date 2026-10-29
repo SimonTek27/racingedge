@@ -1,7 +1,7 @@
 From 18436a278f44abca2656bcef4e6a5a07d1b4746e Mon Sep 17 00:00:00 2001
 From: Simone Rizzo <35865705+SimonTek27@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 11:16:39 +0000
-Subject: [PATCH 1/2] fix: restore the build and add a real waveform effect
+Subject: [PATCH 1/3] fix: restore the build and add a real waveform effect
  chain
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -4832,7 +4832,7 @@ index c1e0226..25fa10b 100644
 From e2cda267dc417be99744e6fb27e7860738308e6f Mon Sep 17 00:00:00 2001
 From: SimonTek27 <SimonTek27@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 10:21:05 +0000
-Subject: [PATCH 2/2] fix(editor): rebuild the lost AudioBridge and project
+Subject: [PATCH 2/3] fix(editor): rebuild the lost AudioBridge and project
  model
 
 The editor crate did not compile: audio_bridge.rs was a 115-line stub whose body
@@ -6010,6 +6010,692 @@ index bf76961..de51d04 100644
  }
  
  #[cfg(test)]
+-- 
+2.43.0
+
+
+From d877135071bc092a845f3a2ebc418aeaa9258f93 Mon Sep 17 00:00:00 2001
+From: SimonTek27 <SimonTek27@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 10:27:57 +0000
+Subject: [PATCH 3/3] feat(editor): stream parameter and bus edits to the
+ running game
+
+The Live Update client existed but nothing ever constructed it: main.rs held
+`live_update`/`live_client` fields it never read, and the client's reader was
+created and immediately dropped, so a game disconnecting went unnoticed.
+
+- The editor client owns its reader, drains acks without blocking the frame,
+  can send bus mute/solo alongside volume, and disconnects cleanly.
+- UI: a Live menu connects/disconnects, a status dot shows the socket state, and
+  Intensity plus per-bus volume/mute/solo edits are pushed as they change.
+- Socket polling is throttled to 100 ms: the read carries a 1 ms timeout, so
+  polling every frame would spend frame budget for nothing.
+- Server: the welcome and pong replies were missing their opening brace, so no
+  JSON client could parse the handshake. Fixed, with tests for the handshake and
+  for a `set_bus` line carrying volume, mute and solo together.
+- The editor enables the runtime's `live-update` feature so its tests can run
+  the real server rather than a mock.
+
+Tests: 16 editor (5 new: a parameter edit reaches the playing game, bus state
+applies, the handshake is JSON and disconnects are reaped, an idle socket does
+not block, string fields are escaped), 8 runtime.
+---
+ editor/Cargo.toml          |   2 +-
+ editor/src/audio_bridge.rs |  10 ++
+ editor/src/live_client.rs  | 284 +++++++++++++++++++++++++++++++++----
+ editor/src/main.rs         | 141 +++++++++++++++++-
+ runtime/src/live_update.rs |  51 ++++++-
+ 5 files changed, 458 insertions(+), 30 deletions(-)
+
+diff --git a/editor/Cargo.toml b/editor/Cargo.toml
+index b743a92..53f75b1 100644
+--- a/editor/Cargo.toml
++++ b/editor/Cargo.toml
+@@ -16,7 +16,7 @@ path = "src/main.rs"
+ eframe = { version = "0.31", default-features = true }
+ egui = "0.31"
+ ramod = { path = ".." }
+-ramod_runtime = { path = "../runtime", default-features = true, features = ["backend-cpal"] }
++ramod_runtime = { path = "../runtime", default-features = true, features = ["backend-cpal", "live-update"] }
+ ramod_waveform = { path = "../waveform" }
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+diff --git a/editor/src/audio_bridge.rs b/editor/src/audio_bridge.rs
+index 594adb3..f6dd597 100644
+--- a/editor/src/audio_bridge.rs
++++ b/editor/src/audio_bridge.rs
+@@ -232,6 +232,16 @@ impl AudioBridge {
+         }
+     }
+ 
++    /// Bus name for a mixer id, so live-update messages can address it by name.
++    pub fn bus_name(&self, bus_id: u32) -> Option<String> {
++        self.rt.mixer().bus(BusId(bus_id)).map(|b| b.name.clone())
++    }
++
++    /// Current `(mute, solo)` of a bus.
++    pub fn bus_flags(&self, bus_id: u32) -> Option<(bool, bool)> {
++        self.rt.mixer().bus(BusId(bus_id)).map(|b| (b.mute, b.solo))
++    }
++
+     pub fn master_levels(&self) -> (f32, f32) {
+         let mixer = self.rt.mixer();
+         mixer
+diff --git a/editor/src/live_client.rs b/editor/src/live_client.rs
+index b2cf4d6..bcf9ea9 100644
+--- a/editor/src/live_client.rs
++++ b/editor/src/live_client.rs
+@@ -1,13 +1,29 @@
+ //! S6.3 — Editor Live Update TCP client.
++//!
++//! The game runs `ramod_runtime::LiveUpdateServer` (feature `live-update`) on
++//! `127.0.0.1:17420`. The protocol is line-oriented JSON in both directions:
++//!
++//! ```text
++//! editor -> game  {"cmd":"set_param","event":"event:/sfx/x","name":"Intensity","value":0.5}
++//! editor -> game  {"cmd":"set_bus","bus":"Music","volume_db":-6,"mute":true}
++//! game  -> editor {"cmd":"welcome","server":"ramod_runtime","version":1}
++//! ```
++//!
++//! Writes are fire-and-forget (the server only acknowledges errors), so the
++//! client keeps the read side drained to notice a dropped game connection
++//! instead of blocking on it.
+ 
+ use std::io::{BufRead, BufReader, Write};
+-use std::net::TcpStream;
++use std::net::{Shutdown, TcpStream};
+ use std::time::Duration;
+ 
+-const DEFAULT_ADDR: &str = "127.0.0.1:17420";
++/// Default address the game's server binds.
++pub const DEFAULT_ADDR: &str = "127.0.0.1:17420";
+ 
+ pub struct EditorLiveClient {
+     stream: TcpStream,
++    reader: BufReader<TcpStream>,
++    addr: String,
+     connected: bool,
+ }
+ 
+@@ -15,46 +31,109 @@ impl EditorLiveClient {
+     pub fn connect(addr: Option<&str>) -> Result<Self, String> {
+         let addr = addr.unwrap_or(DEFAULT_ADDR);
+         let stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+-        stream
+-            .set_read_timeout(Some(Duration::from_millis(300)))
+-            .ok();
++        // Short timeout: `drain_replies` must never stall the UI frame. The UI
++        // also throttles how often it polls, so an idle game costs ~1 ms/100 ms.
++        stream.set_read_timeout(Some(Duration::from_millis(1))).ok();
+         stream.set_nodelay(true).ok();
+-        let mut w = stream.try_clone().map_err(|e| e.to_string())?;
+-        writeln!(
+-            w,
+-            r#"{{"cmd":"hello","client":"ramod_editor","version":1}}"#
+-        )
+-        .map_err(|e| e.to_string())?;
+-        let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+-        let mut line = String::new();
+-        let _ = reader.read_line(&mut line);
+-        Ok(Self {
+-            stream: w,
++        let writer = stream.try_clone().map_err(|e| e.to_string())?;
++        let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
++        let mut client = Self {
++            stream: writer,
++            reader,
++            addr: addr.to_string(),
+             connected: true,
+-        })
++        };
++        client.send_raw(r#"{"cmd":"hello","client":"ramod_editor","version":1}"#)?;
++        Ok(client)
++    }
++
++    pub fn addr(&self) -> &str {
++        &self.addr
+     }
+ 
+     pub fn is_connected(&self) -> bool {
+         self.connected
+     }
+ 
++    /// Push an event parameter (e.g. `Intensity`) to every live instance.
+     pub fn set_param(&mut self, event: &str, name: &str, value: f32) -> Result<(), String> {
+-        self.send(&format!(
+-            r#"{{"cmd":"set_param","event":"{event}","name":"{name}","value":{value}}}"#
++        self.send_raw(&format!(
++            r#"{{"cmd":"set_param","event":"{}","name":"{}","value":{value}}}"#,
++            json_escape(event),
++            json_escape(name)
+         ))
+     }
+ 
+     pub fn set_bus_volume(&mut self, bus: &str, db: f32) -> Result<(), String> {
+-        self.send(&format!(
+-            r#"{{"cmd":"set_bus","bus":"{bus}","volume_db":{db}}}"#
+-        ))
++        self.set_bus_state(bus, Some(db), None, None)
++    }
++
++    /// Set any subset of a bus's state in one line.
++    pub fn set_bus_state(
++        &mut self,
++        bus: &str,
++        volume_db: Option<f32>,
++        mute: Option<bool>,
++        solo: Option<bool>,
++    ) -> Result<(), String> {
++        let mut line = format!(r#"{{"cmd":"set_bus","bus":"{}""#, json_escape(bus));
++        if let Some(db) = volume_db {
++            line.push_str(&format!(r#","volume_db":{db}"#));
++        }
++        if let Some(m) = mute {
++            line.push_str(&format!(r#","mute":{m}"#));
++        }
++        if let Some(s) = solo {
++            line.push_str(&format!(r#","solo":{s}"#));
++        }
++        line.push('}');
++        self.send_raw(&line)
++    }
++
++    /// Read whatever the game sent since the last call (handshake, errors).
++    ///
++    /// Returns `Err` when the game closed the connection, so the UI can show it.
++    pub fn drain_replies(&mut self) -> Result<Vec<String>, String> {
++        let mut lines = Vec::new();
++        loop {
++            let mut line = String::new();
++            match self.reader.read_line(&mut line) {
++                Ok(0) => {
++                    self.connected = false;
++                    return Err("game closed the connection".into());
++                }
++                Ok(_) => {
++                    let trimmed = line.trim();
++                    if !trimmed.is_empty() {
++                        lines.push(trimmed.to_string());
++                    }
++                    if lines.len() >= 32 {
++                        break;
++                    }
++                }
++                Err(e)
++                    if matches!(
++                        e.kind(),
++                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
++                    ) =>
++                {
++                    break;
++                }
++                Err(e) => {
++                    self.connected = false;
++                    return Err(e.to_string());
++                }
++            }
++        }
++        Ok(lines)
+     }
+ 
+-    pub fn ping(&mut self) -> Result<(), String> {
+-        self.send(r#"{"cmd":"ping"}"#)
++    pub fn disconnect(&mut self) {
++        let _ = self.stream.shutdown(Shutdown::Both);
++        self.connected = false;
+     }
+ 
+-    fn send(&mut self, line: &str) -> Result<(), String> {
++    fn send_raw(&mut self, line: &str) -> Result<(), String> {
+         match writeln!(self.stream, "{line}") {
+             Ok(()) => Ok(()),
+             Err(e) => {
+@@ -64,3 +143,158 @@ impl EditorLiveClient {
+         }
+     }
+ }
++
++/// Minimal escaping for the string fields the protocol carries.
++fn json_escape(s: &str) -> String {
++    let mut out = String::with_capacity(s.len());
++    for c in s.chars() {
++        match c {
++            '"' => out.push_str("\\\""),
++            '\\' => out.push_str("\\\\"),
++            '\n' => out.push_str("\\n"),
++            _ => out.push(c),
++        }
++    }
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use ramod_runtime::{EventDescription, LiveUpdateServer, Runtime, RuntimeConfig};
++
++    struct Harness {
++        server: LiveUpdateServer,
++        rt: Runtime,
++        client: EditorLiveClient,
++    }
++
++    fn harness() -> Harness {
++        let server = LiveUpdateServer::bind("127.0.0.1:0").expect("bind server");
++        let addr = server.local_addr();
++        let rt = Runtime::new(RuntimeConfig {
++            sample_rate: 48_000,
++            channels: 2,
++            max_voices: 8,
++            open_device: false,
++        })
++        .expect("headless runtime");
++        let client = EditorLiveClient::connect(Some(&addr)).expect("connect");
++        Harness { server, rt, client }
++    }
++
++    /// The server only accepts on `poll`, so a command needs a couple of polls.
++    fn poll_until(h: &mut Harness, mut done: impl FnMut(&mut Runtime) -> bool) {
++        for _ in 0..32 {
++            h.server.poll(&mut h.rt).expect("poll");
++            if done(&mut h.rt) {
++                return;
++            }
++            std::thread::sleep(Duration::from_millis(2));
++        }
++        panic!("server never applied the command");
++    }
++
++    #[test]
++    fn parameter_edits_reach_the_playing_game() {
++        let mut h = harness();
++        let buffer = h.rt.load_pcm(vec![0.2; 4_800], 1, 48_000).expect("pcm");
++        h.rt.register_event(EventDescription::new("event:/sfx/live", buffer));
++        h.rt.play_event("event:/sfx/live").expect("play");
++        h.rt.profiler_enable(true);
++
++        h.client
++            .set_param("event:/sfx/live", "Intensity", 0.42)
++            .expect("send param");
++
++        poll_until(&mut h, |rt| {
++            let _ = rt.render_seconds(0.005);
++            rt.profiler_latest()
++                .map(|f| {
++                    f.params.iter().any(|(path, name, value)| {
++                        path == "event:/sfx/live"
++                            && name == "Intensity"
++                            && (*value - 0.42).abs() < 1e-6
++                    })
++                })
++                .unwrap_or(false)
++        });
++    }
++
++    #[test]
++    fn bus_edits_reach_the_game() {
++        let mut h = harness();
++        h.client.set_bus_volume("Music", -6.0).expect("send volume");
++        h.client
++            .set_bus_state("Music", None, Some(true), Some(true))
++            .expect("send mute+solo");
++
++        poll_until(&mut h, |rt| {
++            rt.mixer()
++                .buses()
++                .any(|b| b.name == "Music" && (b.volume_db + 6.0).abs() < 1e-6 && b.mute && b.solo)
++        });
++    }
++
++    #[test]
++    fn handshake_is_valid_json_and_disconnect_is_noticed() {
++        let mut h = harness();
++        h.server.poll(&mut h.rt).expect("poll");
++        let mut replies = Vec::new();
++        for _ in 0..8 {
++            replies.extend(h.client.drain_replies().unwrap_or_default());
++            if !replies.is_empty() {
++                break;
++            }
++            std::thread::sleep(Duration::from_millis(2));
++        }
++        assert!(
++            replies.iter().any(|l| l.contains("welcome")),
++            "expected a welcome reply, got {replies:?}"
++        );
++        assert!(
++            replies
++                .iter()
++                .all(|l| l.starts_with('{') && l.ends_with('}')),
++            "every reply must be a JSON object, got {replies:?}"
++        );
++
++        h.client.disconnect();
++        assert!(!h.client.is_connected());
++        for _ in 0..32 {
++            h.server.poll(&mut h.rt).expect("poll");
++            if h.server.client_count() == 0 {
++                break;
++            }
++            std::thread::sleep(Duration::from_millis(2));
++        }
++        assert_eq!(h.server.client_count(), 0, "server should reap the client");
++    }
++
++    #[test]
++    fn quiet_socket_does_not_block_the_frame() {
++        let mut h = harness();
++        let start = std::time::Instant::now();
++        for _ in 0..10 {
++            assert!(h.client.drain_replies().is_ok());
++        }
++        assert!(
++            start.elapsed() < Duration::from_millis(200),
++            "drain_replies must not block the frame when nothing is pending"
++        );
++    }
++
++    #[test]
++    fn string_fields_are_escaped_not_injected() {
++        let mut h = harness();
++        h.client
++            .set_param(r#"event:/x"y"#, "Intensity", 1.0)
++            .expect("send");
++        let line = format!(
++            r#"{{"cmd":"set_param","event":"{}","name":"Intensity","value":1}}"#,
++            json_escape(r#"event:/x"y"#)
++        );
++        assert!(line.contains(r#"event:/x\"y"#));
++        assert_eq!(line.matches("{\"cmd\"").count(), 1, "no duplicate cmd key");
++    }
++}
+diff --git a/editor/src/main.rs b/editor/src/main.rs
+index 594a3a3..33399e2 100644
+--- a/editor/src/main.rs
++++ b/editor/src/main.rs
+@@ -57,6 +57,8 @@ struct RamodEditorApp {
+     audio: Option<AudioBridge>,
+     intensity: f32,
+     live_client: Option<EditorLiveClient>,
++    live_addr: String,
++    last_live_poll: std::time::Instant,
+     waveform: WaveformPanel,
+     profiler: ProfilerPanel,
+     asset_import_path: String,
+@@ -85,6 +87,8 @@ impl RamodEditorApp {
+             audio,
+             intensity: 1.0,
+             live_client: None,
++            live_addr: live_client::DEFAULT_ADDR.to_string(),
++            last_live_poll: std::time::Instant::now(),
+             waveform,
+             profiler: ProfilerPanel::default(),
+             asset_import_path: String::new(),
+@@ -193,11 +197,102 @@ impl RamodEditorApp {
+             }
+         }
+     }
++
++    // -------------------------------------------------------------- live update
++
++    /// Connect or disconnect the Live Update socket to a running game.
++    fn set_live_update(&mut self, on: bool) {
++        if !on {
++            if let Some(mut client) = self.live_client.take() {
++                client.disconnect();
++            }
++            self.live_update = false;
++            self.status_msg = "Live update off".into();
++            return;
++        }
++        match EditorLiveClient::connect(Some(&self.live_addr)) {
++            Ok(client) => {
++                self.status_msg = format!("Live update → {}", client.addr());
++                self.live_client = Some(client);
++                self.live_update = true;
++            }
++            Err(e) => {
++                self.live_client = None;
++                self.live_update = false;
++                self.status_msg = format!("Live update failed: {e} — is the game running?");
++            }
++        }
++    }
++
++    /// Drain server acks so a closed game socket is noticed promptly.
++    ///
++    /// Throttled: the socket read has a 1 ms timeout, so polling every frame
++    /// would eat frame budget for nothing.
++    fn poll_live(&mut self) {
++        if self.live_client.is_none() {
++            return;
++        }
++        let now = std::time::Instant::now();
++        if now.duration_since(self.last_live_poll) < std::time::Duration::from_millis(100) {
++            return;
++        }
++        self.last_live_poll = now;
++        let drained = match self.live_client.as_mut() {
++            Some(client) => client.drain_replies(),
++            None => return,
++        };
++        match drained {
++            Ok(lines) => {
++                if let Some(last) = lines.last() {
++                    self.status_msg = format!("Live: {last}");
++                }
++            }
++            Err(e) => {
++                self.live_client = None;
++                self.live_update = false;
++                self.status_msg = format!("Live update dropped: {e}");
++            }
++        }
++    }
++
++    fn push_live_param(&mut self, name: &str, value: f32) {
++        let Some(path) = self.selected_path().map(|p| p.to_string()) else {
++            return;
++        };
++        let result = match self.live_client.as_mut() {
++            Some(client) => client.set_param(&path, name, value),
++            None => return,
++        };
++        if let Err(e) = result {
++            self.live_client = None;
++            self.live_update = false;
++            self.status_msg = format!("Live update dropped: {e}");
++        }
++    }
++
++    fn push_live_bus_volume(&mut self, bus_id: u32, db: f32) {
++        let Some(name) = self.audio.as_ref().and_then(|a| a.bus_name(bus_id)) else {
++            return;
++        };
++        if let Some(client) = self.live_client.as_mut() {
++            let _ = client.set_bus_state(&name, Some(db), None, None);
++        }
++    }
++
++    fn push_live_bus_state(&mut self, bus_id: u32, mute: Option<bool>, solo: Option<bool>) {
++        let Some(name) = self.audio.as_ref().and_then(|a| a.bus_name(bus_id)) else {
++            return;
++        };
++        if let Some(client) = self.live_client.as_mut() {
++            let _ = client.set_bus_state(&name, None, mute, solo);
++        }
++    }
+ }
+ 
+ impl eframe::App for RamodEditorApp {
+     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+         self.handle_file_drops(ctx);
++        self.poll_live();
+ 
+         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
+             egui::menu::bar(ui, |ui| {
+@@ -216,6 +311,17 @@ impl eframe::App for RamodEditorApp {
+                     ui.checkbox(&mut self.waveform.show, "Waveform Editor");
+                     ui.checkbox(&mut self.profiler.show, "Profiler");
+                 });
++                ui.menu_button("Live", |ui| {
++                    let mut on = self.live_update;
++                    if ui.checkbox(&mut on, "Push edits to game").changed() {
++                        self.set_live_update(on);
++                    }
++                    ui.weak(self.live_addr.as_str());
++                    ui.weak(match self.live_client.as_ref() {
++                        Some(c) if c.is_connected() => "connected",
++                        _ => "not connected",
++                    });
++                });
+                 ui.label(format!("  {}", self.project.name));
+             });
+         });
+@@ -237,6 +343,7 @@ impl eframe::App for RamodEditorApp {
+                     if let Some(a) = self.audio.as_mut() {
+                         a.set_parameter("Intensity", self.intensity);
+                     }
++                    self.push_live_param("Intensity", self.intensity);
+                 }
+                 ui.separator();
+                 let (peak, rms) = self
+@@ -287,7 +394,22 @@ impl eframe::App for RamodEditorApp {
+         }
+ 
+         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+-            ui.label(&self.status_msg);
++            ui.horizontal(|ui| {
++                let live = self
++                    .live_client
++                    .as_ref()
++                    .map(|c| c.is_connected())
++                    .unwrap_or(false);
++                ui.colored_label(
++                    if live {
++                        egui::Color32::from_rgb(120, 200, 120)
++                    } else {
++                        egui::Color32::from_gray(130)
++                    },
++                    if live { "● live" } else { "○ live" },
++                );
++                ui.label(&self.status_msg);
++            });
+         });
+ 
+         egui::SidePanel::left("browser")
+@@ -379,16 +501,33 @@ impl eframe::App for RamodEditorApp {
+                             if let Some(a) = self.audio.as_mut() {
+                                 a.toggle_bus_mute(id);
+                             }
++                            let mute = self
++                                .audio
++                                .as_ref()
++                                .and_then(|a| a.bus_flags(id))
++                                .map(|(mute, _)| mute);
++                            if let Some(mute) = mute {
++                                self.push_live_bus_state(id, Some(mute), None);
++                            }
+                         }
+                         ProfilerAction::ToggleSolo(id) => {
+                             if let Some(a) = self.audio.as_mut() {
+                                 a.toggle_bus_solo(id);
+                             }
++                            let solo = self
++                                .audio
++                                .as_ref()
++                                .and_then(|a| a.bus_flags(id))
++                                .map(|(_, solo)| solo);
++                            if let Some(solo) = solo {
++                                self.push_live_bus_state(id, None, Some(solo));
++                            }
+                         }
+                         ProfilerAction::SetVolume(id, db) => {
+                             if let Some(a) = self.audio.as_mut() {
+                                 a.set_bus_volume_db(id, db);
+                             }
++                            self.push_live_bus_volume(id, db);
+                         }
+                         ProfilerAction::CaptureBase => {
+                             if let Some(a) = self.audio.as_mut() {
+diff --git a/runtime/src/live_update.rs b/runtime/src/live_update.rs
+index 8f7972e..6ad332a 100644
+--- a/runtime/src/live_update.rs
++++ b/runtime/src/live_update.rs
+@@ -57,7 +57,7 @@ impl LiveUpdateServer {
+                         .set_read_timeout(Some(Duration::from_millis(1)))
+                         .ok();
+                     let mut stream_write = stream.try_clone().map_err(|e| e.to_string())?;
+-                    let welcome = r#""cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#;
++                    let welcome = r#"{"cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#;
+                     let _ = writeln!(stream_write, "{welcome}");
+                     let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+                     self.clients.push(ClientConn {
+@@ -115,10 +115,10 @@ fn handle_line(rt: &mut Runtime, line: &str) -> Option<String> {
+     let cmd = json_str(line, "cmd").unwrap_or("");
+     match cmd {
+         "hello" => Some(
+-            r#""cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#
++            r#"{"cmd":"welcome","server":"ramod_runtime","version":1,"features":["param","bus","snapshot"]}"#
+                 .into(),
+         ),
+-        "ping" => Some(r#""cmd":"pong"}"#.into()),
++        "ping" => Some(r#"{"cmd":"pong"}"#.into()),
+         "set_param" => {
+             let event = json_str(line, "event").unwrap_or("");
+             let name = json_str(line, "name").unwrap_or("");
+@@ -155,6 +155,51 @@ fn handle_line(rt: &mut Runtime, line: &str) -> Option<String> {
+     }
+ }
+ 
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn headless() -> Runtime {
++        Runtime::new(crate::RuntimeConfig {
++            open_device: false,
++            ..Default::default()
++        })
++        .expect("headless runtime")
++    }
++
++    fn assert_json_object(reply: Option<String>) {
++        let reply = reply.expect("expected a reply");
++        assert!(
++            reply.starts_with('{') && reply.ends_with('}'),
++            "reply must be a JSON object: {reply}"
++        );
++    }
++
++    #[test]
++    fn handshake_replies_are_json_objects() {
++        let mut rt = headless();
++        assert_json_object(handle_line(&mut rt, r#"{"cmd":"hello"}"#));
++        assert_json_object(handle_line(&mut rt, r#"{"cmd":"ping"}"#));
++        assert_json_object(handle_line(&mut rt, r#"{"cmd":"nope"}"#));
++    }
++
++    #[test]
++    fn set_bus_applies_volume_mute_and_solo() {
++        let mut rt = headless();
++        handle_line(
++            &mut rt,
++            r#"{"cmd":"set_bus","bus":"Music","volume_db":-6.5,"mute":true,"solo":true}"#,
++        );
++        let music = rt
++            .mixer()
++            .buses()
++            .find(|b| b.name == "Music")
++            .expect("Music bus");
++        assert!((music.volume_db + 6.5).abs() < 1e-6);
++        assert!(music.mute && music.solo);
++    }
++}
++
+ fn json_str<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+     let pat = format!("\"{key}\":");
+     let i = line.find(&pat)?;
 -- 
 2.43.0
 
