@@ -4,8 +4,13 @@
 //! cockpit/exterior split, tyre rolling/skid gain — but are pure models. This
 //! plugin turns them into sound: every engine layer becomes a looping
 //! [`AudioPlayer`], the tyre rolling and skid layers become two more, and a
-//! system drives each voice's [`AudioSink`] volume and playback speed from the
-//! model's own weights, so what you hear is the mix the port computes.
+//! system applies [`CarMix`] — the frame
+//! [`build_mix_frame`](crate::simulator::audio_host::build_mix_frame) computes
+//! once for every mixer — to each voice's [`AudioSink`] volume and playback
+//! speed, so what you hear is the mix the port computes.
+//!
+//! A host with its own mixer reads the same frame instead of running this
+//! plugin, which is why the feature is a swap rather than a rewrite.
 //!
 //! The engine set follows the camera: the `engine_int` layers are audible in
 //! cockpit view and the `engine_ext` ones otherwise. Both sets are spawned and
@@ -15,21 +20,20 @@
 use bevy::audio::{AudioPlayer, AudioSink, AudioSource, PlaybackSettings, Volume};
 use bevy::prelude::*;
 
-use crate::simulator::car_sound::{CameraMode, CarSound, CommonSound};
+use crate::simulator::audio_host::{CarMix, TyreKind, VoiceId};
+use crate::simulator::car_sound::CarSound;
+
+/// Whether an engine voice is audible for the active camera.
+///
+/// Defined with the mix
+/// ([`crate::simulator::audio_host::engine_voice_audible`]) so the virtual-voice
+/// rule holds for every mixer; re-exported here where callers expect it.
+pub use crate::simulator::audio_host::engine_voice_audible;
 
 /// Sample rate used for the synthesised tyre loops.
 pub const VOICE_SAMPLE_RATE: u32 = 44_100;
 /// Length of the synthesised tyre loops, in seconds.
 const TYRE_LOOP_SECONDS: f32 = 2.0;
-
-/// Whether an engine voice is audible for the active camera: the interior set
-/// in cockpit view, the exterior set otherwise.
-///
-/// Kept as a free function so the virtual-voice decision is testable without an
-/// audio device.
-pub fn engine_voice_audible(interior: bool, cockpit: bool) -> bool {
-    interior == cockpit
-}
 
 /// One looping voice for one engine layer.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,8 +58,10 @@ pub struct CarAudioPlaybackPlugin;
 
 impl Plugin for CarAudioPlaybackPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_voices)
-            .add_systems(Update, mix_voices);
+        app.add_systems(Startup, spawn_voices).add_systems(
+            Update,
+            mix_voices.after(crate::simulator::audio_host::update_car_mix),
+        );
     }
 }
 
@@ -111,72 +117,49 @@ fn spawn_voices(
     }
 }
 
-/// Drive every voice from the mix models: engine gains from the layer weights
-/// times the camera-aware engine gain, tyre gains from the surface volumes.
+/// Applies the shared mix frame to every voice.
+///
+/// The frame is computed once in [`update_car_mix`] from the models; this system
+/// owns only the `bevy_audio` side — volume, rate and the virtual-voice pause.
+///
+/// [`update_car_mix`]: crate::simulator::audio_host::update_car_mix
 fn mix_voices(
-    sound: Res<CarSound>,
-    common: Res<CommonSound>,
+    mix: Res<CarMix>,
     mut engine_voices: Query<(&EngineVoice, &mut AudioSink)>,
     mut tyre_voices: Query<(&TyreVoice, &mut AudioSink), Without<EngineVoice>>,
 ) {
-    let rpm = sound.state.rpm;
-    let engine_gain = sound.engine_gain();
-    let cockpit = sound.camera == CameraMode::Cockpit;
-
     for (voice, mut sink) in &mut engine_voices {
-        let layers = if voice.interior {
-            &sound.engine_int
-        } else {
-            &sound.engine_ext
+        let id = VoiceId::Engine {
+            layer: voice.layer,
+            interior: voice.interior,
         };
-        let Some(layer) = layers.get(voice.layer) else {
+        let Some(entry) = mix.0.voice(id) else {
             continue;
         };
-        let audible = engine_voice_audible(voice.interior, cockpit) && sound.enabled;
-        let gain = if audible {
-            engine_gain * layer.weight_at_rpm(rpm) * layer.volume
-        } else {
-            0.0
-        };
-        sink.set_volume(Volume::Linear(gain.clamp(0.0, 1.0)));
-
-        let mid_rpm = ((layer.rpm_min + layer.rpm_max) * 0.5).max(1.0);
-        sink.set_speed((rpm / mid_rpm).clamp(0.5, 2.0));
+        sink.set_volume(Volume::Linear(entry.gain));
+        sink.set_speed(entry.rate);
 
         // Virtual voices: the set the camera does not select is paused rather
         // than mixed at zero gain, so a chase view never pays for eight silent
         // interior layers. This is the cheap half of what FMOD/Wwise call
         // virtual voices; priority-based stealing is the other half.
-        if audible {
+        if entry.audible {
             sink.play();
         } else {
             sink.pause();
         }
     }
 
-    let surface = common.active_surface;
     for (voice, mut sink) in &mut tyre_voices {
-        let category = match voice {
-            TyreVoice::Rolling => surface.rolling(),
-            TyreVoice::Skid => surface.skid(),
+        let kind = match voice {
+            TyreVoice::Rolling => TyreKind::Rolling,
+            TyreVoice::Skid => TyreKind::Skid,
         };
-        let gain = if common.enabled && sound.enabled {
-            common
-                .volumes
-                .get(category as usize)
-                .copied()
-                .unwrap_or(0.0)
-        } else {
-            0.0
+        let Some(entry) = mix.0.voice(VoiceId::Tyre(kind)) else {
+            continue;
         };
-        sink.set_volume(Volume::Linear(gain.clamp(0.0, 1.0)));
-
-        let speed = sound.state.speed;
-        let rate = match voice {
-            TyreVoice::Rolling => (0.5 + speed / 80.0).clamp(0.5, 1.5),
-            TyreVoice::Skid => (0.9 + speed / 120.0).clamp(0.9, 1.6),
-        };
-        sink.set_speed(rate);
+        sink.set_volume(Volume::Linear(entry.gain));
+        sink.set_speed(entry.rate);
     }
 }
 

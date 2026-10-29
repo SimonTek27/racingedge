@@ -32,7 +32,8 @@ extracted and re-authored.
 | `src/editor/audio/browser.rs` | Bevy `BankBrowserPlugin`: in-game bank browser |
 | `src/simulator/` | Vehicle runtime: physics, tyre (Magic Formula + wear/flat spots), engine, aero (incl. slipstream/draft), suspension (incl. kinematic LUTs), brakes (thermal + pad/disc wear), drivetrain (differential + gearbox), electronics, cockpit HUD, AC import, car audio, lap/sector timing, personal bests, fuel/pit strategy, career stats, session/flag state, track limits, rF2-style damage, cockpit/chase/free camera, pit-lane flow (garage exit, queue, collisions, service), input mapping + soft force feedback, car setup (model + per-car/track persistence), 3D audio math (doppler/pan/distance),
 track ambience events from `audio_config.ini`, race HUD/telemetry overlay, dynamic track-surface grip grid (rubbering/marbles/wetness) with banking/elevation models, weather evolution, a 1 kHz fixed-step loop, a replay runtime and a multi-car manager with AI spline following |
-| `src/plugins/` | Game-side Bevy plugins: `physics` (drive loop) and `game` (scene, chase camera, HUD assembly) |
+| `src/plugins/` | Game-side Bevy plugins: `physics` (the drive loop and its `DriveControls` input seam), `game` (scene, chase camera, HUD assembly), `menu` (pause/settings/key-rebind overlay) and `keymap` (Bevy `KeyCode` ⇄ ksengine virtual-key codes) |
+| `src/simulator/menus.rs` | Pause, settings and key-rebind model: screens, rows, keyboard/device settings and their INI persistence |
 | `src/main.rs` | The game binary (`racingedge`) |
 | `src/bin/rea_bridge.rs` | The modding CLI (`rea_bridge`) |
 | `src/bin/racingedge_server.rs` | The headless dedicated server (`racingedge-server`) |
@@ -93,6 +94,19 @@ cargo run --release
 | `F2` | Cycle race HUD mode |
 | `F1` | FSB bank browser |
 | `P` | Preview the first playable bank sample |
+| `Esc` | Pause menu (resume, settings, key bindings, restart, quit) |
+
+The pause menu holds the 1 kHz loop (`SimulationPause`), so the car cannot roll
+on while you are in it, and its settings/key-rebind screens edit the same
+`KeyboardMapping` the drive loop reads — rebinding `W` to `I` takes effect
+immediately and persists to `user/keyboard.ini` (settings go to
+`user/settings.ini`).
+
+The drive loop itself never reads the keyboard: it consumes
+`plugins::DriveControls` (throttle, brake, steer), which the key sampler writes
+by default. A host with its own input plugin — or a wheel — inserts
+`KeyboardDriveInput(false)` and writes the same three values, so the physics is
+unchanged whichever side provides input.
 
 The gearbox shifts automatically from the car's own ratios.
 
@@ -101,8 +115,12 @@ The whole game layer is one plugin, `racingedge::plugins::RacingEdgeGamePlugin`
 Bevy runner. Renzora — a Bevy-based engine and editor — is the intended second
 host: `renzora/racingedge_plugin/` holds the wrapper crate and
 [docs/RENZORA_MIGRATION.md](docs/RENZORA_MIGRATION.md) the verified facts and the
-remaining steps. Build with `--no-default-features` to drop the `game-audio`
-playback layer (Renzora ships its own mixer and never enables `bevy_audio`).
+remaining steps. Build with `--no-default-features` for that host: `game-audio`
+is the only place this crate touches `bevy_audio`, so the flag drops the car
+voices, the FSB bank loader/browser and the menu's master-volume control, while
+the mix models, every FSB parser/writer and the settings themselves stay. That
+is the shape Renzora builds — Bevy without `bevy_audio`, since its mixer is its
+own — and CI compiles it on every push.
 
 ## The `rea_bridge` CLI
 
@@ -200,7 +218,10 @@ guaranteed to be readable by the suite.
   skid loops — and updates each voice's volume and playback speed from the layer
   weights and surface volumes every frame. The engine set the camera does not
   select is paused rather than mixed at zero gain, the cheap half of FMOD-style
-  virtual voices.
+  virtual voices. The mix is computed once, as plain data, in
+  `simulator::audio_host` (`CarMixFrame`: gain, rate and audibility per voice,
+  published in the `CarMix` resource), so a host with its own mixer — Renzora's
+  `renzora_audio` — plays exactly the same mix without linking `bevy_audio`.
 * **Play** banks in-game: the `AudioPlugin` loads FSB banks into Bevy
   `AudioSource` assets (WAV for PCM, Ogg for Vorbis), so samples can be previewed
   and driven by gameplay. Point it at a bank with the `RACINGEDGE_BANKS`
@@ -337,9 +358,10 @@ guaranteed to be readable by the suite.
 
 1. Batch conversion and sample grafting (`--into` to add or replace a sample
    inside an existing bank).
-2. Finish the `src/simulator/` runtime in the game binary: car audio
-   (`CarSoundPlugin`), the session/`FeatureHub` flow, menus and the garage UI —
-   the plumbing is tracked in the [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
+2. Finish the `src/simulator/` runtime in the game binary: the
+   session/`FeatureHub` flow and the garage UI (car audio and the pause/settings
+   menus are in) — the plumbing is tracked in the
+   [port backlog](docs/KSENGINE_PORT_BACKLOG.md).
 3. Continue the ksengine port backlog: the remaining track/model formats,
    the Phase 2 driving-experience items (garage/pit, cameras, HUD),
    multiplayer sync and the AC shared-memory bridge.

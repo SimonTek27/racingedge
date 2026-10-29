@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 
+#[cfg(feature = "game-audio")]
 use racingedge::editor::audio::AudioPlugin;
 use racingedge::plugins::RacingEdgeGamePlugin;
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins((RacingEdgeGamePlugin, AudioPlugin))
-        .run();
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins);
+    #[cfg(feature = "game-audio")]
+    app.add_plugins(AudioPlugin);
+    app.add_plugins(RacingEdgeGamePlugin).run();
 }

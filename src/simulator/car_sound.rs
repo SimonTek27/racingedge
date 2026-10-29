@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::simulator::audio_host::{update_car_mix, CarMix};
 #[cfg(feature = "game-audio")]
 use crate::simulator::audio_playback::CarAudioPlaybackPlugin;
 use crate::simulator::physics::{VehicleConfig, VehicleState};
@@ -780,7 +781,11 @@ impl Plugin for CarSoundPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CarSound>()
             .init_resource::<CommonSound>()
-            .add_systems(Update, (update_car_sound, debug_car_sound));
+            // The mix frame is published here, not in the playback plugin: a
+            // host with its own mixer needs it and never builds `bevy_audio`.
+            .init_resource::<CarMix>()
+            .add_systems(Update, (update_car_sound, update_car_mix).chain())
+            .add_systems(Update, debug_car_sound);
         // The voices need `bevy_audio`; a host that brings its own mixer builds
         // without the `game-audio` feature and keeps the mix models only.
         #[cfg(feature = "game-audio")]

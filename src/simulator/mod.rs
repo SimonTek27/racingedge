@@ -3,6 +3,7 @@
 pub mod aero;
 pub mod aero_draft;
 pub mod audio3d;
+pub mod audio_host;
 #[cfg(feature = "game-audio")]
 pub mod audio_playback;
 pub mod brake_thermal;
@@ -23,6 +24,7 @@ pub mod hud;
 pub mod input;
 pub mod r#loop;
 pub mod lut;
+pub mod menus;
 pub mod multi_car;
 pub mod personal_best;
 pub mod physics;
@@ -47,6 +49,10 @@ pub mod weather;
 
 pub use aero_draft::{compute_draft, compute_draft_with_width, DraftState};
 pub use audio3d::{bearing_pan, distance_gain, doppler_factor, CarEventVolumes, OtherCarVoice};
+pub use audio_host::{
+    build_mix_frame, engine_voice_audible, update_car_mix, CarMix, CarMixFrame, TyreKind, VoiceId,
+    VoiceMix,
+};
 #[cfg(feature = "game-audio")]
 pub use audio_playback::{
     wav_bytes, CarAudioPlaybackPlugin, EngineVoice, TyreVoice, VOICE_SAMPLE_RATE,
@@ -76,6 +82,11 @@ pub use hud::{
 pub use input::{
     key_from_name, key_name, load_keyboard_mapping, save_keyboard_mapping, ControllerBackend,
     ControllerState, InputManager, JoystickMapping, KeyboardMapping, AXIS_COUNT,
+};
+pub use menus::{
+    camera_mode_name, hud_mode_name, parse_camera_mode, parse_hud_mode, BindingAction, GameMenu,
+    MenuAction, MenuEntry, MenuItem, MenuScreen, MenuSettings, SettingField, KEYBOARD_PATH,
+    SETTINGS_PATH,
 };
 pub use multi_car::{
     AiController, AiInput, AiOutput, AiTrafficCar, CarEntry, CarKinematics, CarPose, GridCar,
